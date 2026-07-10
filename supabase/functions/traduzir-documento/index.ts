@@ -35,8 +35,10 @@ const SERVICE_ROLE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? "";
 const supabase = createClient(SUPABASE_URL, SERVICE_ROLE_KEY);
 
 const MAX_SEGMENTOS = 600;
-const BATCH_MAX_ITENS = 40;
-const BATCH_MAX_CHARS = 8000;
+// Lotes pequenos: a resposta da Tess tem limite de tamanho e lotes grandes
+// voltavam cortados no meio do JSON.
+const BATCH_MAX_ITENS = 15;
+const BATCH_MAX_CHARS = 3500;
 
 function respond(body: unknown, status = 200) {
   return new Response(JSON.stringify(body), {
@@ -134,48 +136,97 @@ async function callTess(userPrompt: string): Promise<string> {
   return resp.output ?? "";
 }
 
-function extractJsonArray(text: string): string[] {
-  const fences = [...text.matchAll(/```(?:json)?\s*([\s\S]*?)```/g)].map((m) => m[1]);
+// Extrai um array JSON da resposta, tolerando fence markdown sem fechamento
+// e respostas cortadas pelo limite de tamanho da Tess (nesse caso devolve o
+// prefixo integro que deu para recuperar, marcado como truncado).
+function extractJsonArray(text: string): { arr: string[]; truncado: boolean } | null {
+  const fences = [...text.matchAll(/```(?:json)?\s*([\s\S]*?)(?:```|$)/g)].map((m) => m[1]);
   for (const raw of [...fences, text]) {
     const start = raw.indexOf("[");
+    if (start === -1) continue;
     const end = raw.lastIndexOf("]");
-    if (start === -1 || end === -1 || end <= start) continue;
-    try {
-      const parsed = JSON.parse(raw.slice(start, end + 1));
-      if (Array.isArray(parsed)) return parsed.map((x) => String(x));
-    } catch {
-      /* tenta o proximo candidato */
+    if (end > start) {
+      try {
+        const parsed = JSON.parse(raw.slice(start, end + 1));
+        if (Array.isArray(parsed)) {
+          return { arr: parsed.map((x) => String(x)), truncado: false };
+        }
+      } catch {
+        /* tenta reparar abaixo */
+      }
+    }
+    // Resposta cortada: corta na ultima string completa e fecha o array
+    const s = raw.slice(start);
+    const corte = s.lastIndexOf('",');
+    if (corte > 0) {
+      try {
+        const parsed = JSON.parse(s.slice(0, corte + 1) + "]");
+        if (Array.isArray(parsed) && parsed.length > 0) {
+          return { arr: parsed.map((x) => String(x)), truncado: true };
+        }
+      } catch {
+        /* tenta o proximo candidato */
+      }
     }
   }
-  throw new Error(`Array JSON nao encontrado na resposta Tess. Preview: "${text.slice(0, 200)}"`);
+  return null;
 }
 
-async function traduzirLote(
-  textos: string[],
-  idioma: "en" | "es",
-  refs: string[]
-): Promise<string[]> {
+function montarPrompt(textos: string[], idioma: "en" | "es", refs: string[]): string {
   const alvo = idioma === "en" ? "ingles" : "espanhol";
-  const prompt = [
+  return [
     `Traduza os trechos abaixo de portugues para ${alvo}.`,
     `Sao trechos extraidos de um documento institucional do Clube de Regatas do Flamengo (apresentacao ou relatorio); preserve nomes proprios, siglas, numeros e valores exatamente como estao.`,
     refs.length
       ? `Use estas URLs como referencia de tom, vocabulario e estilo editorial no idioma de destino:\n${refs.join("\n")}`
       : "",
-    `Responda APENAS com um array JSON de strings com EXATAMENTE ${textos.length} itens, na mesma ordem dos trechos de entrada, sem comentarios nem texto adicional. Trechos vazios ou intraduziveis devem ser devolvidos como estao.`,
+    `Responda APENAS com um array JSON de strings com EXATAMENTE ${textos.length} itens, na mesma ordem dos trechos de entrada, sem markdown, sem comentarios e sem texto adicional. Trechos vazios ou intraduziveis devem ser devolvidos como estao.`,
     `Trechos (JSON):\n${JSON.stringify(textos)}`,
   ]
     .filter(Boolean)
     .join("\n\n");
+}
 
-  for (let tentativa = 0; tentativa < 2; tentativa++) {
-    const out = await callTess(prompt);
-    const arr = extractJsonArray(out);
-    if (arr.length === textos.length) return arr;
+// Traduz com recuperacao automatica:
+// - resposta truncada -> aproveita o prefixo integro e traduz so o restante
+// - resposta invalida ou com contagem errada -> divide o lote ao meio e repete
+async function traduzirComFallback(
+  textos: string[],
+  idioma: "en" | "es",
+  refs: string[],
+  profundidade = 0
+): Promise<string[]> {
+  if (textos.length === 0) return [];
+
+  const out = await callTess(montarPrompt(textos, idioma, refs));
+  const resultado = extractJsonArray(out);
+
+  if (resultado && !resultado.truncado && resultado.arr.length === textos.length) {
+    return resultado.arr;
   }
-  throw new Error(
-    `Tess devolveu quantidade de traducoes diferente da esperada (${textos.length} trechos).`
-  );
+
+  if (resultado?.truncado && resultado.arr.length > 1 && resultado.arr.length <= textos.length) {
+    // O ultimo item recuperado pode estar cortado no meio — descarta por seguranca
+    const aproveitados = resultado.arr.slice(0, -1);
+    const resto = await traduzirComFallback(
+      textos.slice(aproveitados.length),
+      idioma,
+      refs,
+      profundidade + 1
+    );
+    return [...aproveitados, ...resto];
+  }
+
+  if (textos.length === 1 || profundidade >= 6) {
+    throw new Error(
+      `Tess nao devolveu traducao valida apos varias tentativas. Preview: "${out.slice(0, 200)}"`
+    );
+  }
+
+  const meio = Math.ceil(textos.length / 2);
+  const a = await traduzirComFallback(textos.slice(0, meio), idioma, refs, profundidade + 1);
+  const b = await traduzirComFallback(textos.slice(meio), idioma, refs, profundidade + 1);
+  return [...a, ...b];
 }
 
 function base64ParaBytes(b64: string): Uint8Array {
@@ -293,7 +344,7 @@ Deno.serve(async (req: Request) => {
     if (lote.length) lotes.push(lote);
 
     for (const l of lotes) {
-      const resultado = await traduzirLote(l.map((s) => s.texto), idioma, refs);
+      const resultado = await traduzirComFallback(l.map((s) => s.texto), idioma, refs);
       l.forEach((s, i) => traducoes.set(`${s.arquivo}#${s.indice}`, resultado[i]));
     }
 
