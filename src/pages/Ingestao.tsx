@@ -28,10 +28,10 @@ export function IngestaoPage() {
   }, []);
 
   const urls = bulk
-    .split(/\r?\n/)
+    .split(/\s+/)
     .map((s) => s.trim())
     .filter((s) => s.length > 0);
-  const valid = urls.filter((u) => /^https?:\/\//.test(u));
+  const valid = [...new Set(urls.filter((u) => /^https?:\/\//.test(u)))];
 
   async function enviar() {
     if (valid.length === 0) return;
@@ -40,7 +40,12 @@ export function IngestaoPage() {
     try {
       const result = await enfileirarUrls(valid);
       if (result.ok) {
-        setFeedback(`${result.enqueued} URL(s) enviada(s) para a fila. Processamento iniciado.`);
+        const skipped = result.skipped ?? 0;
+        setFeedback(
+          `${result.enqueued} URL(s) enviada(s) para a fila.` +
+            (skipped > 0 ? ` ${skipped} ignorada(s) por já estarem na fila ou em processamento.` : '') +
+            (result.enqueued ? ' Processamento iniciado.' : '')
+        );
         setBulk('');
       } else {
         setFeedback(`Erro ao enfileirar: ${result.error ?? 'desconhecido'}`);

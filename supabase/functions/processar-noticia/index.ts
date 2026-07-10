@@ -128,6 +128,19 @@ function extractJson(text: string): any {
   );
 }
 
+// Remove blocos que nao carregam conteudo editorial antes de enviar a Tess.
+// Sem isso, paginas pesadas em script estouravam o corte de 80k chars antes
+// do texto da noticia, causando "Extracao incompleta".
+function limparHtml(html: string): string {
+  return html
+    .replace(/<script[\s\S]*?<\/script>/gi, "")
+    .replace(/<style[\s\S]*?<\/style>/gi, "")
+    .replace(/<noscript[\s\S]*?<\/noscript>/gi, "")
+    .replace(/<svg[\s\S]*?<\/svg>/gi, "")
+    .replace(/<!--[\s\S]*?-->/g, "")
+    .replace(/[ \t]{2,}/g, " ");
+}
+
 async function processarUrl(
   url_origem: string,
   refsEn: string[],
@@ -152,19 +165,30 @@ async function processarUrl(
     );
   }
 
-  const cleanedHtml = html.slice(0, 80000);
+  const cleanedHtml = limparHtml(html).slice(0, 80000);
+
+  // group_id determinístico e estavel: se a URL ja foi processada antes,
+  // reutiliza o group_id existente para nao duplicar a noticia
+  // (o componente de data mudaria o id a cada reprocessamento em outro dia).
+  const { data: existente } = await supabase
+    .from("noticias")
+    .select("group_id")
+    .eq("url_origem", url_origem)
+    .maybeSingle();
+
   const hash6 = await sha6(url_origem);
   const today = new Date().toISOString().slice(0, 10).replace(/-/g, "");
   const tempSlug =
     slugify(url_origem.split("/").pop() ?? "noticia") || "noticia";
-  const group_id = `flanews_${today}_${tempSlug.slice(0, 40)}_${hash6}`;
+  const group_id =
+    existente?.group_id ?? `flanews_${today}_${tempSlug.slice(0, 40)}_${hash6}`;
 
   // PARTE 1: Extracao
   const userMsg1 = `URL: ${url_origem}\ngroup_id sugerido: ${group_id}\n\nHTML:\n${cleanedHtml}`;
   const text1 = await callTessAgent(TESS_AGENT_EXTRACAO, userMsg1);
   const parte1 = extractJson(text1);
   parte1.url_origem = url_origem;
-  parte1.group_id = parte1.group_id || group_id;
+  parte1.group_id = group_id;
 
   const ptBR = parte1.versoes?.["pt-BR"];
   if (!ptBR?.titulo || !ptBR?.corpo || ptBR.corpo.length < 50) {
@@ -249,6 +273,24 @@ async function runWatchdog() {
     .eq("status", "processando")
     .lt("updated_at", tenMinAgo)
     .select("id");
+
+  // Se a corrente de processamento morreu (ha jobs na fila mas nenhum
+  // processando), religa a corrente — sem isso jobs ficavam presos em
+  // "fila" para sempre apos uma falha da function.
+  const [{ count: emFila }, { count: processando }] = await Promise.all([
+    supabase
+      .from("jobs_traducao")
+      .select("id", { count: "exact", head: true })
+      .eq("status", "fila"),
+    supabase
+      .from("jobs_traducao")
+      .select("id", { count: "exact", head: true })
+      .eq("status", "processando"),
+  ]);
+  if ((emFila ?? 0) > 0 && (processando ?? 0) === 0) {
+    triggerNext();
+  }
+
   return (data ?? []).length;
 }
 
@@ -269,34 +311,40 @@ function triggerNext() {
   }
 }
 
-async function processarProximo(): Promise<{ processed: boolean; group_id?: string; error?: string }> {
-  // Pick 1 job from queue: select first, then update by ID
-  const { data: candidates } = await supabase
-    .from("jobs_traducao")
-    .select("id, url_origem")
-    .eq("status", "fila")
-    .order("created_at", { ascending: true })
-    .limit(1);
+// Tenta reivindicar o proximo job da fila. Com workers em paralelo, dois
+// podem selecionar o mesmo candidato; o perdedor tenta o proximo em vez de
+// encerrar sua corrente (o que degradaria o paralelismo para 1).
+async function claimProximoJob(): Promise<{ id: string; url_origem: string } | null> {
+  for (let tentativa = 0; tentativa < 3; tentativa++) {
+    const { data: candidates } = await supabase
+      .from("jobs_traducao")
+      .select("id, url_origem")
+      .eq("status", "fila")
+      .order("created_at", { ascending: true })
+      .limit(1);
 
-  if (!candidates || candidates.length === 0) {
-    return { processed: false };
+    if (!candidates || candidates.length === 0) return null;
+
+    const job = candidates[0];
+    const { data: claimed } = await supabase
+      .from("jobs_traducao")
+      .update({
+        status: "processando",
+        fase: "extracao",
+        updated_at: new Date().toISOString(),
+      })
+      .eq("id", job.id)
+      .eq("status", "fila")
+      .select("id");
+
+    if (claimed && claimed.length > 0) return job;
   }
+  return null;
+}
 
-  const job = candidates[0];
-
-  // Claim it atomically
-  const { data: claimed } = await supabase
-    .from("jobs_traducao")
-    .update({
-      status: "processando",
-      fase: "extracao",
-      updated_at: new Date().toISOString(),
-    })
-    .eq("id", job.id)
-    .eq("status", "fila")
-    .select("id");
-
-  if (!claimed || claimed.length === 0) {
+async function processarProximo(): Promise<{ processed: boolean; group_id?: string; error?: string }> {
+  const job = await claimProximoJob();
+  if (!job) {
     return { processed: false };
   }
 
@@ -408,7 +456,25 @@ Deno.serve(async (req: Request) => {
       if (urls.length === 0) {
         return respond({ error: "Nenhuma URL valida" }, 400);
       }
-      const rows = urls.map((url) => ({
+
+      // Dedup: dentro do proprio lote e contra jobs ja na fila/processando
+      const unicas = [...new Set(urls)];
+      const { data: ativos } = await supabase
+        .from("jobs_traducao")
+        .select("url_origem")
+        .in("status", ["fila", "processando"]);
+      const emAndamento = new Set((ativos ?? []).map((j) => j.url_origem));
+      const novas = unicas.filter((u) => !emAndamento.has(u));
+
+      if (novas.length === 0) {
+        return respond({
+          ok: true,
+          enqueued: 0,
+          skipped: urls.length,
+        });
+      }
+
+      const rows = novas.map((url) => ({
         url_origem: url,
         status: "fila",
         fase: "extracao",
@@ -420,9 +486,17 @@ Deno.serve(async (req: Request) => {
       if (error) {
         return respond({ error: error.message }, 500);
       }
-      // Trigger processing chain
-      triggerNext();
-      return respond({ ok: true, enqueued: (data ?? []).length });
+
+      // Dispara ate 3 correntes em paralelo para dar vazao a lotes grandes
+      const paralelismo = Math.min(3, (data ?? []).length);
+      for (let i = 0; i < paralelismo; i++) {
+        triggerNext();
+      }
+      return respond({
+        ok: true,
+        enqueued: (data ?? []).length,
+        skipped: urls.length - novas.length,
+      });
     }
 
     // Legacy: single URL direct processing (kept for backward compat)

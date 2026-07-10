@@ -20,7 +20,7 @@ async function callFunction(body: Record<string, unknown>) {
   return res.json();
 }
 
-export async function enfileirarUrls(urls: string[]): Promise<{ ok: boolean; enqueued?: number; error?: string }> {
+export async function enfileirarUrls(urls: string[]): Promise<{ ok: boolean; enqueued?: number; skipped?: number; error?: string }> {
   return callFunction({ action: 'enfileirar', urls });
 }
 
