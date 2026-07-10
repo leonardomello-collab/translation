@@ -40,6 +40,19 @@ export async function runWatchdog() {
   return callFunction({ action: 'watchdog' });
 }
 
+export async function traduzirDocumento(
+  filename: string,
+  fileBase64: string,
+  idioma: 'en' | 'es'
+): Promise<{ ok: boolean; filename?: string; fileBase64?: string; segmentos?: number; error?: string }> {
+  const res = await fetch(`${FUNCTIONS_URL}/traduzir-documento`, {
+    method: 'POST',
+    headers: headers(),
+    body: JSON.stringify({ filename, fileBase64, idioma }),
+  });
+  return res.json();
+}
+
 export async function getCounts() {
   const [p, a, r] = await Promise.all([
     supabase.from('noticias').select('group_id', { count: 'exact', head: true }).eq('status', 'pendente'),

@@ -1,9 +1,17 @@
-import { Flame, Send, ListChecks } from 'lucide-react';
+import { Flame, Send, ListChecks, FileText } from 'lucide-react';
+
+export type Page = 'ingestao' | 'avaliacao' | 'documentos';
 
 interface Props {
-  page: 'ingestao' | 'avaliacao';
-  onChange: (p: 'ingestao' | 'avaliacao') => void;
+  page: Page;
+  onChange: (p: Page) => void;
 }
+
+const NAV: { key: Page; label: string; Icon: typeof Send }[] = [
+  { key: 'ingestao', label: 'Ingestão', Icon: Send },
+  { key: 'avaliacao', label: 'Avaliação', Icon: ListChecks },
+  { key: 'documentos', label: 'Documentos', Icon: FileText },
+];
 
 export function Header({ page, onChange }: Props) {
   return (
@@ -19,28 +27,20 @@ export function Header({ page, onChange }: Props) {
           </div>
         </div>
         <nav className="flex items-center gap-1 bg-neutral-900 rounded-lg p-1 border border-neutral-800">
-          <button
-            onClick={() => onChange('ingestao')}
-            className={`flex items-center gap-2 px-4 py-2 rounded-md text-sm font-medium transition ${
-              page === 'ingestao'
-                ? 'bg-red-600 text-white shadow-sm'
-                : 'text-gray-400 hover:text-white hover:bg-neutral-800'
-            }`}
-          >
-            <Send className="w-4 h-4" />
-            Ingestão
-          </button>
-          <button
-            onClick={() => onChange('avaliacao')}
-            className={`flex items-center gap-2 px-4 py-2 rounded-md text-sm font-medium transition ${
-              page === 'avaliacao'
-                ? 'bg-red-600 text-white shadow-sm'
-                : 'text-gray-400 hover:text-white hover:bg-neutral-800'
-            }`}
-          >
-            <ListChecks className="w-4 h-4" />
-            Avaliação
-          </button>
+          {NAV.map(({ key, label, Icon }) => (
+            <button
+              key={key}
+              onClick={() => onChange(key)}
+              className={`flex items-center gap-2 px-4 py-2 rounded-md text-sm font-medium transition ${
+                page === key
+                  ? 'bg-red-600 text-white shadow-sm'
+                  : 'text-gray-400 hover:text-white hover:bg-neutral-800'
+              }`}
+            >
+              <Icon className="w-4 h-4" />
+              {label}
+            </button>
+          ))}
         </nav>
       </div>
     </header>
