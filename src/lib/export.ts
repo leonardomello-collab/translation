@@ -80,14 +80,17 @@ export function download(filename: string, content: string, mime: string) {
   a.href = URL.createObjectURL(blob);
   a.download = filename;
   a.click();
-  URL.revokeObjectURL(a.href);
+  // Revogar depois de um tempo: revogar imediatamente pode abortar
+  // downloads disparados em sequência no mesmo tick
+  setTimeout(() => URL.revokeObjectURL(a.href), 30000);
 }
 
-async function downloadMultiplos(files: { name: string; content: string }[]) {
+// Dispara todos os downloads no MESMO instante: o Chrome agrupa a rajada e
+// pede permissão de "vários downloads" uma única vez. Com pausas entre os
+// cliques, ele bloqueava silenciosamente do segundo arquivo em diante.
+function downloadMultiplos(files: { name: string; content: string }[]) {
   for (const f of files) {
     download(f.name, f.content, 'application/json');
-    // Chrome bloqueia downloads consecutivos disparados no mesmo instante
-    await new Promise((r) => setTimeout(r, 300));
   }
 }
 
@@ -154,7 +157,7 @@ export async function exportarJson(group_id: string) {
     name: `${group_id}-${l}.json`,
     content: JSON.stringify([paraPublicacao(n, l, n.versoes[l])], null, 2),
   }));
-  await downloadMultiplos(files);
+  downloadMultiplos(files);
 }
 
 // Exporta em volume: um arquivo por idioma com todas as notícias selecionadas.
@@ -168,7 +171,7 @@ export async function exportarLoteJson(group_ids: string[]) {
       content: JSON.stringify(objs, null, 2),
     };
   }).filter((f) => f.content !== '[]');
-  await downloadMultiplos(files);
+  downloadMultiplos(files);
 }
 
 function csvEscape(val: any): string {
