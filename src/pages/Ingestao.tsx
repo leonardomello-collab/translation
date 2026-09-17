@@ -3,6 +3,7 @@ import { Send, Link2, Loader2 } from 'lucide-react';
 import { MetricsCards } from '../components/MetricsCards';
 import { ReferenciasPanel } from '../components/ReferenciasPanel';
 import { JobsFila } from '../components/JobsFila';
+import { LimparNoticiasButton } from '../components/LimparNoticiasButton';
 import { getCounts, enfileirarUrls } from '../lib/api';
 import { supabase } from '../lib/supabase';
 
@@ -60,11 +61,14 @@ export function IngestaoPage() {
 
   return (
     <div className="max-w-7xl mx-auto px-6 py-8 space-y-8">
-      <div>
-        <h2 className="text-2xl font-bold text-white tracking-tight">Painel de Ingestão</h2>
-        <p className="text-gray-400 text-sm mt-1">
-          Envie URLs de notícias do Flamengo para extração e tradução adaptativa em EN e ES.
-        </p>
+      <div className="flex items-start justify-between gap-4">
+        <div>
+          <h2 className="text-2xl font-bold text-white tracking-tight">Painel de Ingestão</h2>
+          <p className="text-gray-400 text-sm mt-1">
+            Envie URLs de notícias do Flamengo para extração e tradução adaptativa em EN e ES.
+          </p>
+        </div>
+        <LimparNoticiasButton total={counts.pendente + counts.aprovado + counts.reprovado} onDone={refresh} />
       </div>
 
       <MetricsCards {...counts} />

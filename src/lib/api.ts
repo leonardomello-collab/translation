@@ -65,3 +65,14 @@ export async function getCounts() {
     reprovado: r.count ?? 0,
   };
 }
+
+// Apaga TODAS as noticias; versoes e imagens caem em cascata (FK ON DELETE
+// CASCADE). Referencias e fila de jobs nao sao tocadas. Devolve quantas saíram.
+export async function limparNoticias(): Promise<number> {
+  const { count, error } = await supabase
+    .from('noticias')
+    .delete({ count: 'exact' })
+    .neq('group_id', '');
+  if (error) throw error;
+  return count ?? 0;
+}
