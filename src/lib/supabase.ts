@@ -39,6 +39,15 @@ export interface Imagem {
   caption: string | null;
   role: 'cover' | 'inline';
   ordem: number;
+  // Quantos blocos de texto precedem a imagem no corpo; null = desconhecido (linhas antigas)
+  posicao: number | null;
+  atributos: {
+    alt?: string | null;
+    width?: string | null;
+    height?: string | null;
+    srcset?: string | null;
+    sizes?: string | null;
+  } | null;
 }
 
 export interface ReferenciaTraducao {
