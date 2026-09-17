@@ -1,4 +1,4 @@
-import { Eye, Trash2, Download, FileJson, FileSpreadsheet, ChevronDown, ImageOff, Check } from 'lucide-react';
+import { Eye, Trash2, Download, FileJson, FileSpreadsheet, ChevronDown, ImageOff, Check, Search } from 'lucide-react';
 import { useState } from 'react';
 
 interface Props {
@@ -13,6 +13,9 @@ interface Props {
   onExcluir: () => void;
   onExportJson: () => void;
   onExportCsv: () => void;
+  // Aprovada é definitiva: some o Avaliar (e a exclusão) e entra o Checar SEO
+  aprovada?: boolean;
+  onSeo?: () => void;
 }
 
 export function NoticiaCard(props: Props) {
@@ -73,13 +76,23 @@ export function NoticiaCard(props: Props) {
         <p className="text-gray-500 text-xs mt-2">{dateLabel}</p>
 
         <div className="flex items-center gap-2 mt-4 pt-4 border-t border-neutral-800">
-          <button
-            onClick={props.onAvaliar}
-            className="flex-1 flex items-center justify-center gap-1.5 px-3 py-2 rounded-lg bg-red-600 hover:bg-red-700 text-white text-xs font-semibold transition"
-          >
-            <Eye className="w-3.5 h-3.5" />
-            Avaliar
-          </button>
+          {props.aprovada ? (
+            <button
+              onClick={props.onSeo}
+              className="flex-1 flex items-center justify-center gap-1.5 px-3 py-2 rounded-lg bg-red-600 hover:bg-red-700 text-white text-xs font-semibold transition"
+            >
+              <Search className="w-3.5 h-3.5" />
+              Checar SEO
+            </button>
+          ) : (
+            <button
+              onClick={props.onAvaliar}
+              className="flex-1 flex items-center justify-center gap-1.5 px-3 py-2 rounded-lg bg-red-600 hover:bg-red-700 text-white text-xs font-semibold transition"
+            >
+              <Eye className="w-3.5 h-3.5" />
+              Avaliar
+            </button>
+          )}
 
           <div className="relative">
             <button
@@ -114,13 +127,15 @@ export function NoticiaCard(props: Props) {
             )}
           </div>
 
-          <button
-            onClick={props.onExcluir}
-            className="flex items-center justify-center px-3 py-2 rounded-lg bg-neutral-800 hover:bg-red-600 text-gray-400 hover:text-white transition"
-            title="Excluir"
-          >
-            <Trash2 className="w-3.5 h-3.5" />
-          </button>
+          {!props.aprovada && (
+            <button
+              onClick={props.onExcluir}
+              className="flex items-center justify-center px-3 py-2 rounded-lg bg-neutral-800 hover:bg-red-600 text-gray-400 hover:text-white transition"
+              title="Excluir"
+            >
+              <Trash2 className="w-3.5 h-3.5" />
+            </button>
+          )}
         </div>
       </div>
     </div>
