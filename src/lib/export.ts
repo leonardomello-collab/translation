@@ -1,7 +1,5 @@
-import { supabase } from './supabase';
+import { supabase, type Imagem, type Versao } from './supabase';
 
-const SITE_ID = 'flamengo';
-const AUTHOR_SLUG = 'Comunicacao Flamengo';
 const LOCALES = ['pt-BR', 'en', 'es'] as const;
 const CHUNK = 50;
 
@@ -36,19 +34,22 @@ export async function carregarNoticiaCompleta(group_id: string) {
   };
 }
 
-// Carrega várias notícias com 2 consultas por lote de 50 ids,
+// Carrega várias notícias com 3 consultas por lote de 50 ids,
 // em vez de 3 consultas por notícia (inviável para exportação em volume).
 async function carregarLote(group_ids: string[]) {
   const noticias: any[] = [];
   const versoes: any[] = [];
+  const imagens: Imagem[] = [];
   for (let i = 0; i < group_ids.length; i += CHUNK) {
     const ids = group_ids.slice(i, i + CHUNK);
-    const [nRes, vRes] = await Promise.all([
+    const [nRes, vRes, iRes] = await Promise.all([
       supabase.from('noticias').select('*').in('group_id', ids),
       supabase.from('versoes').select('*').in('group_id', ids),
+      supabase.from('imagens').select('*').in('group_id', ids).order('ordem'),
     ]);
     noticias.push(...(nRes.data ?? []));
     versoes.push(...(vRes.data ?? []));
+    imagens.push(...(iRes.data ?? []));
   }
 
   const vMap = new Map<string, Record<string, any>>();
@@ -56,6 +57,10 @@ async function carregarLote(group_ids: string[]) {
     const m = vMap.get(v.group_id) ?? {};
     m[v.idioma] = v;
     vMap.set(v.group_id, m);
+  });
+  const iMap = new Map<string, Imagem[]>();
+  imagens.forEach((i) => {
+    iMap.set(i.group_id, [...(iMap.get(i.group_id) ?? []), i]);
   });
 
   return group_ids
@@ -68,6 +73,7 @@ async function carregarLote(group_ids: string[]) {
         publicado_em: n.publicado_em,
         status: n.status,
         versoes: vMap.get(id) ?? {},
+        imagens: iMap.get(id) ?? [],
         notas_extracao: n.notas_extracao ?? null,
       };
     })
@@ -94,84 +100,112 @@ function downloadMultiplos(files: { name: string; content: string }[]) {
   }
 }
 
-function slugifyTag(s: string): string {
-  return s
-    .normalize('NFD')
-    .replace(/[̀-ͯ]/g, '')
-    .toLowerCase()
-    .replace(/[^a-z0-9\s-]/g, '')
-    .trim()
-    .replace(/\s+/g, '-');
+function escapeHtml(s: string): string {
+  return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 }
 
-function corpoParaHtml(corpo: string): string {
-  if (/<p[\s>]/i.test(corpo)) return corpo;
-  const esc = corpo.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-  return esc
+// Devolve o corpo como lista de blocos <p>…</p>. O corpo vem da Tess como
+// texto com uma linha por parágrafo; se já vier em HTML, separa pelos <p>.
+function corpoEmParagrafos(corpo: string): string[] {
+  if (/<p[\s>]/i.test(corpo)) {
+    return [...corpo.matchAll(/<p\b[^>]*>[\s\S]*?<\/p>/gi)].map((m) => m[0]);
+  }
+  return corpo
     .split(/\r?\n+/)
     .map((p) => p.trim())
     .filter(Boolean)
-    .map((p) => `<p>${p}</p>`)
-    .join('');
+    .map((p) => `<p>${escapeHtml(p)}</p>`);
 }
 
-// Formata em ISO com offset fixo de Brasília (-03:00), como no formato de publicação.
-function publishedAtBrasilia(iso: string | null): string | null {
-  if (!iso) return null;
-  const d = new Date(iso);
-  if (isNaN(d.getTime())) return iso;
-  const t = new Date(d.getTime() - 3 * 3600 * 1000);
-  const p = (n: number) => String(n).padStart(2, '0');
-  return `${t.getUTCFullYear()}-${p(t.getUTCMonth() + 1)}-${p(t.getUTCDate())}T${p(t.getUTCHours())}:${p(t.getUTCMinutes())}:${p(t.getUTCSeconds())}-03:00`;
+// srcset no padrão que o editor do Strapi grava: a mesma URL repetida nas
+// larguras de referência, com vírgula final.
+function srcsetPadrao(url: string): string {
+  return [117, 375, 562, 750].map((w) => `${url} ${w}w`).join(',') + ',';
 }
 
-function paraPublicacao(n: any, locale: string, v: any) {
-  const slug = v.url_personalizada || '';
+// Bloco de imagem no formato de importação do Strapi:
+// <p><img …><figcaption>…</figcaption></p>
+function blocoImagem(img: Imagem): string {
+  const at = img.atributos ?? {};
+  const attrs = [
+    `src="${escapeHtml(img.url)}"`,
+    `alt="${escapeHtml(at.alt ?? '')}"`,
+    `srcset="${escapeHtml(at.srcset ?? srcsetPadrao(img.url))}"`,
+    `sizes="${escapeHtml(at.sizes ?? '100vw')}"`,
+    at.width ? `width="${escapeHtml(String(at.width))}"` : '',
+    at.height ? `height="${escapeHtml(String(at.height))}"` : '',
+  ]
+    .filter(Boolean)
+    .join(' ');
+  const cap = img.caption ? `<figcaption>${escapeHtml(img.caption)}</figcaption>` : '';
+  return `<p><img ${attrs}>${cap}</p>`;
+}
+
+// Monta o bodyRichText: parágrafos do corpo traduzido com as imagens inline
+// reinseridas onde estavam na matéria original (campo posicao = quantos
+// parágrafos vêm antes). Imagem sem posição conhecida vai para o fim.
+function montarBodyRichText(corpo: string, imagens: Imagem[]): string {
+  const paras = corpoEmParagrafos(corpo ?? '');
+  const inline = imagens
+    .filter((i) => i.role === 'inline')
+    .map((i, idx) => ({ ...i, _ordem: i.ordem ?? idx }))
+    .sort((a, b) => (a.posicao ?? Infinity) - (b.posicao ?? Infinity) || a._ordem - b._ordem);
+
+  const out: string[] = [];
+  let cursor = 0;
+  for (const img of inline) {
+    const alvo = Math.min(img.posicao ?? paras.length, paras.length);
+    while (cursor < alvo) out.push(paras[cursor++]);
+    out.push(blocoImagem(img));
+  }
+  while (cursor < paras.length) out.push(paras[cursor++]);
+  return out.join('');
+}
+
+// Objeto no formato de importação do Strapi: { locale, fields: { … } }.
+// Campos de OG e Twitter ficam vazios por decisão editorial; a categoria
+// não viaja no JSON e é atribuída na importação.
+function paraStrapi(locale: string, v: Versao, imagens: Imagem[]) {
+  const slug = (v.url_personalizada || '').replace(/^\/+/, '');
   return {
-    translationKey: n.group_id,
     locale,
-    siteId: SITE_ID,
-    legacyId: n.group_id,
-    slug: slug && !slug.startsWith('/') ? `/${slug}` : slug,
-    title: v.titulo ?? '',
-    summary: v.subtitulo || v.descricao || '',
-    content: corpoParaHtml(v.corpo ?? ''),
-    authorSlug: AUTHOR_SLUG,
-    categorySlugs: v.categoria ? [slugifyTag(v.categoria)] : [],
-    tagSlugs: (v.palavras_chave ?? []).map(slugifyTag).filter(Boolean),
-    seo: {
-      metaTitle: v.titulo ?? '',
-      metaDescription: v.descricao ?? '',
-      keywords: (v.palavras_chave ?? []).join(', '),
+    fields: {
+      title: v.titulo ?? '',
+      slug,
+      summary: v.subtitulo || v.descricao || '',
+      bodyRichText: montarBodyRichText(v.corpo ?? '', imagens),
+      seo: {
+        metaTitle: v.titulo ?? '',
+        metaDescription: v.descricao ?? '',
+        keywords: (v.palavras_chave ?? []).join(', '),
+        ogTitle: '',
+        ogDescription: '',
+        twitterTitle: '',
+        twitterDescription: '',
+      },
     },
-    publishedAt: publishedAtBrasilia(n.publicado_em),
   };
 }
 
+function arquivosDaNoticia(n: { group_id: string; versoes: Record<string, Versao>; imagens: Imagem[] }) {
+  return LOCALES.filter((l) => n.versoes[l]).map((l) => ({
+    name: `${n.group_id}-${l}.json`,
+    content: JSON.stringify(paraStrapi(l, n.versoes[l], n.imagens), null, 2),
+  }));
+}
+
 // Exporta uma notícia: um arquivo por idioma, ex. <group_id>-en.json,
-// cada um contendo um array com o objeto no formato de publicação.
+// cada um com um único objeto no formato de importação do Strapi.
 export async function exportarJson(group_id: string) {
   const [n] = await carregarLote([group_id]);
   if (!n) return;
-  const files = LOCALES.filter((l) => n.versoes[l]).map((l) => ({
-    name: `${group_id}-${l}.json`,
-    content: JSON.stringify([paraPublicacao(n, l, n.versoes[l])], null, 2),
-  }));
-  downloadMultiplos(files);
+  downloadMultiplos(arquivosDaNoticia(n));
 }
 
-// Exporta em volume: um arquivo por idioma com todas as notícias selecionadas.
+// Exporta em volume: um arquivo por notícia e por idioma.
 export async function exportarLoteJson(group_ids: string[]) {
   const items = await carregarLote(group_ids);
-  const stamp = new Date().toISOString().slice(0, 10).replace(/-/g, '');
-  const files = LOCALES.map((l) => {
-    const objs = items.filter((n) => n.versoes[l]).map((n) => paraPublicacao(n, l, n.versoes[l]));
-    return {
-      name: `flanews_${stamp}_${items.length}noticias-${l}.json`,
-      content: JSON.stringify(objs, null, 2),
-    };
-  }).filter((f) => f.content !== '[]');
-  downloadMultiplos(files);
+  downloadMultiplos(items.flatMap(arquivosDaNoticia));
 }
 
 function csvEscape(val: any): string {

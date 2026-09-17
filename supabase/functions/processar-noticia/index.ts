@@ -141,6 +141,96 @@ function limparHtml(html: string): string {
     .replace(/[ \t]{2,}/g, " ");
 }
 
+function decodeEntities(s: string): string {
+  return s
+    .replace(/&amp;/g, "&")
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;|&apos;/g, "'")
+    .replace(/&nbsp;/g, " ");
+}
+
+export interface ImagemInline {
+  url: string;
+  caption: string | null;
+  posicao: number;
+  atributos: Record<string, string | null>;
+}
+
+// Extrai as imagens do corpo renderizado da materia (div __articleContent),
+// anotando para cada uma quantos blocos de texto a precedem. E isso que
+// permite reinserir a imagem no lugar certo do texto traduzido na exportacao.
+// Deterministico: nao passa pela Tess, que nao preserva a posicao.
+export function extrairImagensInline(html: string): ImagemInline[] {
+  const open = html.match(/<div[^>]*class="[^"]*__articleContent[^"]*"[^>]*>/);
+  if (!open || open.index === undefined) return [];
+  const start = open.index;
+
+  // Fecha o div do corpo contando o aninhamento.
+  const divRe = /<\/?div\b[^>]*>/g;
+  divRe.lastIndex = start;
+  let depth = 0;
+  let end = -1;
+  let t: RegExpExecArray | null;
+  while ((t = divRe.exec(html))) {
+    if (t[0].startsWith("</")) depth--;
+    else if (!t[0].endsWith("/>")) depth++;
+    if (depth === 0) {
+      end = t.index + t[0].length;
+      break;
+    }
+  }
+  if (end < 0) return [];
+  const body = html.slice(start, end);
+
+  const blocoRe =
+    /<(p|h[1-6]|ul|ol|blockquote|figure)\b[^>]*>([\s\S]*?)<\/\1>|<img\b[^>]*>/gi;
+  const out: ImagemInline[] = [];
+  let paragrafos = 0;
+  let m: RegExpExecArray | null;
+  while ((m = blocoRe.exec(body))) {
+    const frag = m[0];
+    const tag = (m[1] ?? "img").toLowerCase();
+    const img = frag.match(/<img\b[^>]*>/i)?.[0];
+    // Um <p> que so embrulha uma imagem (formato do editor do Strapi) conta
+    // como bloco de imagem, nao como paragrafo de texto.
+    if (img) {
+      const attr = (n: string) =>
+        img.match(new RegExp("\\b" + n + '="([^"]*)"', "i"))?.[1] ?? null;
+      const src = attr("src");
+      if (src) {
+        const cap = frag.match(/<figcaption[^>]*>([\s\S]*?)<\/figcaption>/i)?.[1];
+        out.push({
+          url: src,
+          caption: cap ? decodeEntities(cap.replace(/<[^>]+>/g, "")).trim() || null : null,
+          posicao: paragrafos,
+          atributos: {
+            alt: attr("alt"),
+            width: attr("width"),
+            height: attr("height"),
+            srcset: attr("srcset"),
+            sizes: attr("sizes"),
+          },
+        });
+      }
+      continue;
+    }
+    if (tag === "figure") continue;
+    const texto = (m[2] ?? "").replace(/<[^>]+>/g, "").replace(/&nbsp;/g, " ").trim();
+    if (texto) paragrafos++;
+  }
+  return out;
+}
+
+function ogImage(html: string): string | null {
+  return (
+    html.match(/<meta[^>]+property="og:image"[^>]+content="([^"]+)"/i)?.[1] ??
+    html.match(/<meta[^>]+content="([^"]+)"[^>]+property="og:image"/i)?.[1] ??
+    null
+  );
+}
+
 async function processarUrl(
   url_origem: string,
   refsEn: string[],
@@ -166,6 +256,8 @@ async function processarUrl(
   }
 
   const cleanedHtml = limparHtml(html).slice(0, 80000);
+  const imagensInline = extrairImagensInline(html);
+  const capaOg = ogImage(html);
 
   // group_id determinístico e estavel: se a URL ja foi processada antes,
   // reutiliza o group_id existente para nao duplicar a noticia
@@ -214,6 +306,15 @@ async function processarUrl(
   parte2.url_origem = url_origem;
   parte2.group_id = parte1.group_id;
   if (!parte2.imagens) parte2.imagens = parte1.imagens;
+  // Substitui as imagens inline da Tess pelas extraidas do HTML, que trazem
+  // posicao e atributos. A capa segue vindo da Tess; se ela nao marcar uma,
+  // usa o og:image da pagina.
+  const capaTess = (parte2.imagens ?? []).find((i: any) => i.role === "cover");
+  const capa = capaTess ?? (capaOg ? { url: capaOg, caption: null, role: "cover" } : null);
+  parte2.imagens = [
+    ...(capa ? [{ ...capa, role: "cover" }] : []),
+    ...imagensInline.map((i) => ({ ...i, role: "inline" })),
+  ];
   if (!parte2.publicado_em) parte2.publicado_em = parte1.publicado_em;
   if (parte2.versoes && !parte2.versoes["pt-BR"] && parte1.versoes?.["pt-BR"]) {
     parte2.versoes["pt-BR"] = parte1.versoes["pt-BR"];
@@ -257,6 +358,8 @@ async function persistir(data: any) {
     caption: img.caption ?? null,
     role: img.role ?? "inline",
     ordem: i,
+    posicao: img.posicao ?? null,
+    atributos: img.atributos ?? null,
   }));
   if (imagensRows.length) await supabase.from("imagens").insert(imagensRows);
 }
