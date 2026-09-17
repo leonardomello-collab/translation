@@ -3,6 +3,7 @@ import { Search, Inbox, CheckSquare, Square, Trash2, FileJson, FileSpreadsheet, 
 import { supabase, Status } from '../lib/supabase';
 import { NoticiaCard } from '../components/NoticiaCard';
 import { AvaliarModal } from '../components/AvaliarModal';
+import { LimparNoticiasButton } from '../components/LimparNoticiasButton';
 import { exportarJson, exportarCsv, exportarLoteJson, exportarLoteCsv } from '../lib/export';
 
 interface Row {
@@ -238,6 +239,7 @@ export function AvaliacaoPage() {
             Filtros
             {hasFiltros && <span className="w-1.5 h-1.5 rounded-full bg-red-500" />}
           </button>
+          <LimparNoticiasButton total={counts.pendente + counts.aprovado + counts.reprovado} onDone={carregar} />
         </div>
       </div>
 
