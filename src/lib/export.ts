@@ -100,8 +100,14 @@ function downloadMultiplos(files: { name: string; content: string }[]) {
   }
 }
 
+// Para valores de atributo: aspas precisam virar &quot;.
 function escapeHtml(s: string): string {
   return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+}
+
+// Para conteudo de texto (paragrafos, figcaption): aspas ficam como estao.
+function escapeText(s: string): string {
+  return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 }
 
 // Devolve o corpo como lista de blocos <p>…</p>. O corpo vem da Tess como
@@ -114,7 +120,7 @@ function corpoEmParagrafos(corpo: string): string[] {
     .split(/\r?\n+/)
     .map((p) => p.trim())
     .filter(Boolean)
-    .map((p) => `<p>${escapeHtml(p)}</p>`);
+    .map((p) => `<p>${escapeText(p)}</p>`);
 }
 
 // srcset no padrão que o editor do Strapi grava: a mesma URL repetida nas
@@ -137,7 +143,7 @@ function blocoImagem(img: Imagem): string {
   ]
     .filter(Boolean)
     .join(' ');
-  const cap = img.caption ? `<figcaption>${escapeHtml(img.caption)}</figcaption>` : '';
+  const cap = img.caption ? `<figcaption>${escapeText(img.caption)}</figcaption>` : '';
   return `<p><img ${attrs}>${cap}</p>`;
 }
 
