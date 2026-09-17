@@ -3,6 +3,7 @@ import { Search, Inbox, CheckSquare, Square, Trash2, FileJson, FileSpreadsheet, 
 import { supabase, Status } from '../lib/supabase';
 import { NoticiaCard } from '../components/NoticiaCard';
 import { AvaliarModal } from '../components/AvaliarModal';
+import { SeoModal } from '../components/SeoModal';
 import { LimparNoticiasButton } from '../components/LimparNoticiasButton';
 import { exportarJson, exportarCsv, exportarLoteJson, exportarLoteCsv } from '../lib/export';
 
@@ -28,6 +29,7 @@ export function AvaliacaoPage() {
   const [sort, setSort] = useState<SortKey>('recent');
   const [selecionados, setSelecionados] = useState<Set<string>>(new Set());
   const [avaliando, setAvaliando] = useState<string | null>(null);
+  const [seoDe, setSeoDe] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [showFilters, setShowFilters] = useState(false);
 
@@ -392,10 +394,14 @@ export function AvaliacaoPage() {
               onExcluir={() => excluir(r.group_id)}
               onExportJson={() => exportarJson(r.group_id)}
               onExportCsv={() => exportarCsv(r.group_id)}
+              aprovada={tab === 'aprovado'}
+              onSeo={() => setSeoDe(r.group_id)}
             />
           ))}
         </div>
       )}
+
+      {seoDe && <SeoModal group_id={seoDe} onClose={() => setSeoDe(null)} />}
 
       {avaliando && (
         <AvaliarModal
