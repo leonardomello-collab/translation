@@ -94,8 +94,8 @@ export function SeoModal({ group_id, onClose }: Props) {
             <p className="text-gray-500 text-sm">Versão em português não encontrada.</p>
           ) : (
             <>
-              <CampoSeo label="Meta title" valor={seo.titulo} contador />
-              <CampoSeo label="Meta description" valor={seo.descricao} contador multiline />
+              <CampoSeo label="Título para busca" valor={seo.titulo} contador />
+              <CampoSeo label="Descrição para busca" valor={seo.descricao} contador multiline />
               <CampoSeo
                 label="Palavras-chave"
                 valor={keywords}
