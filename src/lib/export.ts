@@ -172,7 +172,9 @@ function montarBodyRichText(corpo: string, imagens: Imagem[]): string {
 // Campos de OG e Twitter ficam vazios por decisão editorial; a categoria
 // não viaja no JSON e é atribuída na importação.
 function paraStrapi(locale: string, v: Versao, imagens: Imagem[]) {
-  const slug = (v.url_personalizada || '').replace(/^\/+/, '');
+  // Só o último trecho do caminho: "news/football/abc-def" -> "abc-def".
+  // O prefixo de seção é definido pelo próprio CMS na importação.
+  const slug = (v.url_personalizada || '').split('/').filter(Boolean).pop() ?? '';
   return {
     locale,
     fields: {
