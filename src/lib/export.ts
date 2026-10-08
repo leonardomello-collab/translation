@@ -1,4 +1,5 @@
 import { supabase, type Imagem, type Versao } from './supabase';
+import { sanitizeInline } from './richtext';
 
 const LOCALES = ['pt-BR', 'en', 'es'] as const;
 const CHUNK = 50;
@@ -110,17 +111,25 @@ function escapeText(s: string): string {
   return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 }
 
-// Devolve o corpo como lista de blocos <p>…</p>. O corpo vem da Tess como
-// texto com uma linha por parágrafo; se já vier em HTML, separa pelos <p>.
+// Devolve o corpo como lista de blocos. O corpo vem da Tess como texto com
+// uma linha por parágrafo, podendo trazer formatação inline (negrito, itálico,
+// link) reaplicada na extração; se já vier em blocos HTML, mantém os blocos.
+// Em qualquer caminho o conteúdo passa pelo sanitizador: só a formatação da
+// lista permitida sobrevive, o resto vira texto.
+const BLOCO_RE = /<(p|h[1-6]|ul|ol|blockquote)\b[^>]*>([\s\S]*?)<\/\1>/gi;
+
 function corpoEmParagrafos(corpo: string): string[] {
-  if (/<p[\s>]/i.test(corpo)) {
-    return [...corpo.matchAll(/<p\b[^>]*>[\s\S]*?<\/p>/gi)].map((m) => m[0]);
+  if (/<(p|h[1-6]|ul|ol|blockquote)[\s>]/i.test(corpo)) {
+    return [...corpo.matchAll(BLOCO_RE)].map((m) => {
+      const tag = m[1].toLowerCase();
+      return `<${tag}>${sanitizeInline(m[2])}</${tag}>`;
+    });
   }
   return corpo
     .split(/\r?\n+/)
     .map((p) => p.trim())
     .filter(Boolean)
-    .map((p) => `<p>${escapeText(p)}</p>`);
+    .map((p) => `<p>${sanitizeInline(p)}</p>`);
 }
 
 // srcset no padrão que o editor do Strapi grava: a mesma URL repetida nas
@@ -168,10 +177,25 @@ function montarBodyRichText(corpo: string, imagens: Imagem[]): string {
   return out.join('');
 }
 
+// Data e hora de publicação em ISO com o fuso de Brasília (-03:00). O banco
+// guarda o instante em UTC; o arquivo sai no horário local para conferir sem
+// conversão de cabeça. O Brasil não tem horário de verão, então -03:00 é fixo.
+function publicadoEmIso(iso: string | null | undefined): string | null {
+  if (!iso) return null;
+  const d = new Date(iso);
+  if (isNaN(d.getTime())) return null;
+  const t = new Date(d.getTime() - 3 * 3600 * 1000);
+  const z = (n: number) => String(n).padStart(2, '0');
+  return (
+    `${t.getUTCFullYear()}-${z(t.getUTCMonth() + 1)}-${z(t.getUTCDate())}` +
+    `T${z(t.getUTCHours())}:${z(t.getUTCMinutes())}:${z(t.getUTCSeconds())}-03:00`
+  );
+}
+
 // Objeto no formato de importação do Strapi: { locale, fields: { … } }.
 // Campos de OG e Twitter ficam vazios por decisão editorial; a categoria
 // não viaja no JSON e é atribuída na importação.
-function paraStrapi(locale: string, v: Versao, imagens: Imagem[]) {
+function paraStrapi(locale: string, v: Versao, imagens: Imagem[], publicado_em: string | null) {
   // Só o último trecho do caminho: "news/football/abc-def" -> "abc-def".
   // O prefixo de seção é definido pelo próprio CMS na importação.
   const slug = (v.url_personalizada || '').split('/').filter(Boolean).pop() ?? '';
@@ -181,6 +205,7 @@ function paraStrapi(locale: string, v: Versao, imagens: Imagem[]) {
       title: v.titulo ?? '',
       slug,
       summary: v.subtitulo || v.descricao || '',
+      publishedAt: publicadoEmIso(publicado_em),
       bodyRichText: montarBodyRichText(v.corpo ?? '', imagens),
       seo: {
         metaTitle: v.titulo ?? '',
@@ -195,10 +220,15 @@ function paraStrapi(locale: string, v: Versao, imagens: Imagem[]) {
   };
 }
 
-function arquivosDaNoticia(n: { group_id: string; versoes: Record<string, Versao>; imagens: Imagem[] }) {
+function arquivosDaNoticia(n: {
+  group_id: string;
+  versoes: Record<string, Versao>;
+  imagens: Imagem[];
+  publicado_em?: string | null;
+}) {
   return LOCALES.filter((l) => n.versoes[l]).map((l) => ({
     name: `${n.group_id}-${l}.json`,
-    content: JSON.stringify(paraStrapi(l, n.versoes[l], n.imagens), null, 2),
+    content: JSON.stringify(paraStrapi(l, n.versoes[l], n.imagens, n.publicado_em ?? null), null, 2),
   }));
 }
 
