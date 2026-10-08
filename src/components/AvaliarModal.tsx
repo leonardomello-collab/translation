@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { X, Check, XCircle, ChevronLeft, ChevronRight, Info, ExternalLink } from 'lucide-react';
 import { carregarNoticiaCompleta } from '../lib/export';
 import { supabase } from '../lib/supabase';
+import { sanitizeInline } from '../lib/richtext';
 
 interface Props {
   group_id: string;
@@ -176,9 +177,12 @@ export function AvaliarModal({ group_id, onClose, onDecidir, onNav }: Props) {
                             )}
                           </Field>
                           <Field label="Corpo">
-                            <div className="text-gray-300 leading-relaxed whitespace-pre-wrap max-h-80 overflow-auto pr-1 text-[13px]">
-                              {v.corpo || '—'}
-                            </div>
+                            {/* O corpo pode trazer negrito/italico/link da materia; o
+                                sanitizador deixa passar so essas tags. */}
+                            <div
+                              className="text-gray-300 leading-relaxed whitespace-pre-wrap max-h-80 overflow-auto pr-1 text-[13px] [&_a]:text-red-400 [&_a]:underline"
+                              dangerouslySetInnerHTML={{ __html: sanitizeInline(v.corpo || '—') }}
+                            />
                           </Field>
                           <Field label="Descrição (SEO)">
                             <p className="text-gray-300 text-[13px] leading-relaxed">{v.descricao || '—'}</p>

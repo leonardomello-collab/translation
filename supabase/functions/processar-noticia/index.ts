@@ -162,9 +162,10 @@ export interface ImagemInline {
 // anotando para cada uma quantos blocos de texto a precedem. E isso que
 // permite reinserir a imagem no lugar certo do texto traduzido na exportacao.
 // Deterministico: nao passa pela Tess, que nao preserva a posicao.
-export function extrairImagensInline(html: string): ImagemInline[] {
+// Recorte do HTML que corresponde ao corpo renderizado da materia.
+export function corpoDaMateria(html: string): string | null {
   const open = html.match(/<div[^>]*class="[^"]*__articleContent[^"]*"[^>]*>/);
-  if (!open || open.index === undefined) return [];
+  if (!open || open.index === undefined) return null;
   const start = open.index;
 
   // Fecha o div do corpo contando o aninhamento.
@@ -181,8 +182,13 @@ export function extrairImagensInline(html: string): ImagemInline[] {
       break;
     }
   }
-  if (end < 0) return [];
-  const body = html.slice(start, end);
+  if (end < 0) return null;
+  return html.slice(start, end);
+}
+
+export function extrairImagensInline(html: string): ImagemInline[] {
+  const body = corpoDaMateria(html);
+  if (!body) return [];
 
   const blocoRe =
     /<(p|h[1-6]|ul|ol|blockquote|figure)\b[^>]*>([\s\S]*?)<\/\1>|<img\b[^>]*>/gi;
@@ -223,6 +229,138 @@ export function extrairImagensInline(html: string): ImagemInline[] {
   return out;
 }
 
+// --- Formatacao inline (negrito, italico, link) ----------------------------
+// A Tess devolve o corpo em texto puro: a materia perde negrito, italico e
+// links. Em vez de pedir que ela preserve as tags (que o prompt dela nao
+// garante), os trechos formatados sao lidos direto do HTML e reaplicados no
+// corpo por casamento EXATO de texto. Casamento por texto, nao por indice de
+// paragrafo: a contagem de paragrafos nao bate entre os idiomas.
+
+export interface SpanFormatado {
+  tipo: "strong" | "em" | "u" | "a";
+  texto: string;
+  href?: string;
+}
+
+export function extrairSpansFormatados(html: string): SpanFormatado[] {
+  const body = corpoDaMateria(html);
+  if (!body) return [];
+  const limpar = (x: string) =>
+    decodeEntities(x.replace(/<[^>]+>/g, "")).replace(/\s+/g, " ").trim();
+  const out: SpanFormatado[] = [];
+  const equivalente: Record<string, SpanFormatado["tipo"]> = {
+    strong: "strong",
+    b: "strong",
+    em: "em",
+    i: "em",
+    u: "u",
+  };
+
+  const inline = /<(strong|b|em|i|u)\b[^>]*>([\s\S]*?)<\/\1>/gi;
+  let m: RegExpExecArray | null;
+  while ((m = inline.exec(body))) {
+    const tipo = equivalente[m[1].toLowerCase()];
+    const texto = limpar(m[2]);
+    if (tipo && texto.length >= 2) out.push({ tipo, texto });
+  }
+
+  const link = /<a\b[^>]*href="([^"]+)"[^>]*>([\s\S]*?)<\/a>/gi;
+  while ((m = link.exec(body))) {
+    const href = m[1].trim();
+    const texto = limpar(m[2]);
+    if (texto.length >= 2 && /^https?:\/\//i.test(href)) {
+      out.push({ tipo: "a", texto, href });
+    }
+  }
+  return out;
+}
+
+// Diferencas que aparecem entre o HTML e o texto da Tess: aspas e apostrofos
+// tipograficos, travessao, reticencias, nbsp e espacos repetidos. Normaliza
+// essas variacoes guardando, para cada caractere normalizado, a posicao
+// correspondente no texto original.
+const EQUIV_BUSCA: Record<string, string> = {
+  "\u201c": '"',
+  "\u201d": '"',
+  "\u2018": "'",
+  "\u2019": "'",
+  "\u2013": "-",
+  "\u2014": "-",
+  "\u00a0": " ",
+  "\u2026": "...",
+};
+
+function normalizarComMapa(s: string): { norm: string; mapa: number[] } {
+  let norm = "";
+  const mapa: number[] = [];
+  let emEspaco = true; // comeca true para cortar espaco inicial
+  for (let i = 0; i < s.length; i++) {
+    const c = EQUIV_BUSCA[s[i]] ?? s[i];
+    if (/^\s$/.test(c)) {
+      if (emEspaco) continue;
+      norm += " ";
+      mapa.push(i);
+      emEspaco = true;
+      continue;
+    }
+    emEspaco = false;
+    for (const ch of c) {
+      norm += ch;
+      mapa.push(i);
+    }
+  }
+  return { norm, mapa };
+}
+
+export function aplicarFormatacao(corpo: string, spans: SpanFormatado[]): string {
+  if (!corpo || spans.length === 0) return corpo;
+  const { norm, mapa } = normalizarComMapa(corpo);
+  const insercoes: { ini: number; fim: number; abre: string; fecha: string }[] = [];
+  const ocupados: [number, number][] = [];
+  const vistos = new Set<string>();
+
+  // Do trecho mais longo para o mais curto: o titulo de secao inteiro vence o
+  // pedaco dele que tambem aparece marcado.
+  for (const sp of [...spans].sort((a, b) => b.texto.length - a.texto.length)) {
+    const chave = `${sp.tipo}|${sp.href ?? ""}|${sp.texto}`;
+    if (vistos.has(chave)) continue;
+    vistos.add(chave);
+
+    const agulha = normalizarComMapa(sp.texto).norm;
+    if (agulha.length < 2) continue;
+    const achou = norm.indexOf(agulha);
+    if (achou < 0) continue;
+    // Mais de uma ocorrencia: nao da para saber qual estava formatada.
+    if (norm.indexOf(agulha, achou + 1) >= 0) continue;
+
+    const ini = mapa[achou];
+    const fim = mapa[achou + agulha.length - 1] + 1;
+    // Nao atravessa quebra de paragrafo (viraria tag aberta em dois <p>)
+    // nem trecho que ja recebeu formatacao.
+    if (corpo.slice(ini, fim).includes("\n")) continue;
+    if (ocupados.some(([a, b]) => ini < b && fim > a)) continue;
+
+    ocupados.push([ini, fim]);
+    insercoes.push(
+      sp.tipo === "a"
+        ? { ini, fim, abre: `<a href="${sp.href}">`, fecha: "</a>" }
+        : { ini, fim, abre: `<${sp.tipo}>`, fecha: `</${sp.tipo}>` }
+    );
+  }
+
+  let out = corpo;
+  // De tras para frente: as posicoes anteriores continuam validas.
+  for (const ins of insercoes.sort((a, b) => b.ini - a.ini)) {
+    out =
+      out.slice(0, ins.ini) +
+      ins.abre +
+      out.slice(ins.ini, ins.fim) +
+      ins.fecha +
+      out.slice(ins.fim);
+  }
+  return out;
+}
+
 function ogImage(html: string): string | null {
   return (
     html.match(/<meta[^>]+property="og:image"[^>]+content="([^"]+)"/i)?.[1] ??
@@ -258,6 +396,7 @@ async function processarUrl(
   const cleanedHtml = limparHtml(html).slice(0, 80000);
   const imagensInline = extrairImagensInline(html);
   const capaOg = ogImage(html);
+  const spansFormatados = extrairSpansFormatados(html);
 
   // group_id determinístico e estavel: se a URL ja foi processada antes,
   // reutiliza o group_id existente para nao duplicar a noticia
@@ -289,6 +428,13 @@ async function processarUrl(
     );
   }
 
+  // Reaplica negrito/italico/links no pt-BR antes da traducao: o texto que a
+  // Tess recebe ja vai com as tags, o que da chance de EN e ES voltarem
+  // formatados tambem.
+  if (ptBR?.corpo) {
+    ptBR.corpo = aplicarFormatacao(ptBR.corpo, spansFormatados);
+  }
+
   await supabase
     .from("jobs_traducao")
     .update({
@@ -299,7 +445,12 @@ async function processarUrl(
     .eq("id", jobId);
 
   // PARTE 2: Traducao
-  const userMsg2 = `JSON da Parte 1:\n${JSON.stringify(parte1)}\n\nReferencias EN:\n${refsEn.join("\n") || "(nenhuma)"}\n\nReferencias ES:\n${refsEs.join("\n") || "(nenhuma)"}`;
+  const instrucaoFormatacao =
+    "FORMATACAO: o corpo em pt-BR pode conter as tags <strong>, <em>, <u>, " +
+    "<a href=\"...\"> e <br>. Mantenha cada uma delas em volta do trecho " +
+    "equivalente na traducao, sem acrescentar outras tags e sem traduzir o " +
+    "endereco dos links.";
+  const userMsg2 = `JSON da Parte 1:\n${JSON.stringify(parte1)}\n\n${instrucaoFormatacao}\n\nReferencias EN:\n${refsEn.join("\n") || "(nenhuma)"}\n\nReferencias ES:\n${refsEs.join("\n") || "(nenhuma)"}`;
   const text2 = await callTessAgent(TESS_AGENT_TRADUCAO, userMsg2);
   const parte2 = extractJson(text2);
 
@@ -318,6 +469,12 @@ async function processarUrl(
   if (!parte2.publicado_em) parte2.publicado_em = parte1.publicado_em;
   if (parte2.versoes && !parte2.versoes["pt-BR"] && parte1.versoes?.["pt-BR"]) {
     parte2.versoes["pt-BR"] = parte1.versoes["pt-BR"];
+  }
+  // Se a parte 2 reescreveu o pt-BR sem as tags, reaplica: o portugues nao
+  // depende da Tess para manter a formatacao.
+  const ptFinal = parte2.versoes?.["pt-BR"];
+  if (ptFinal?.corpo && !/<(strong|em|u|a)\b/i.test(ptFinal.corpo)) {
+    ptFinal.corpo = aplicarFormatacao(ptFinal.corpo, spansFormatados);
   }
 
   await persistir(parte2);
