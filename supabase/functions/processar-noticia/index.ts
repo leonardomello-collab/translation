@@ -312,6 +312,17 @@ function normalizarComMapa(s: string): { norm: string; mapa: number[] } {
   return { norm, mapa };
 }
 
+// O trecho [ini, fim) ocupa a linha toda? Ignora emoji, marcador e espaco
+// antes, e pontuacao depois: "🏀 FlaBasquete" e "Destaques:" contam.
+function linhaInteira(corpo: string, ini: number, fim: number): boolean {
+  const iniLinha = corpo.lastIndexOf("\n", ini - 1) + 1;
+  let fimLinha = corpo.indexOf("\n", fim);
+  if (fimLinha < 0) fimLinha = corpo.length;
+  const antes = corpo.slice(iniLinha, ini);
+  const depois = corpo.slice(fim, fimLinha);
+  return /^[\s\p{P}\p{S}]*$/u.test(antes) && /^[\s\p{P}]*$/u.test(depois);
+}
+
 export function aplicarFormatacao(corpo: string, spans: SpanFormatado[]): string {
   if (!corpo || spans.length === 0) return corpo;
   const { norm, mapa } = normalizarComMapa(corpo);
@@ -328,13 +339,30 @@ export function aplicarFormatacao(corpo: string, spans: SpanFormatado[]): string
 
     const agulha = normalizarComMapa(sp.texto).norm;
     if (agulha.length < 2) continue;
-    const achou = norm.indexOf(agulha);
-    if (achou < 0) continue;
-    // Mais de uma ocorrencia: nao da para saber qual estava formatada.
-    if (norm.indexOf(agulha, achou + 1) >= 0) continue;
 
-    const ini = mapa[achou];
-    const fim = mapa[achou + agulha.length - 1] + 1;
+    const ocorrencias: number[] = [];
+    for (let i = norm.indexOf(agulha); i >= 0; i = norm.indexOf(agulha, i + 1)) {
+      ocorrencias.push(i);
+    }
+    if (ocorrencias.length === 0) continue;
+
+    // Com mais de uma ocorrencia, so vale a que ocupa a linha inteira: e o
+    // titulo de secao ("FlaBasquete" em "🏀 FlaBasquete"), nao a mesma palavra
+    // citada no meio de outro paragrafo. Se nenhuma ou mais de uma se
+    // encaixar, deixa sem formatacao em vez de marcar o lugar errado.
+    const escolhida =
+      ocorrencias.length === 1
+        ? ocorrencias[0]
+        : (() => {
+            const sozinhas = ocorrencias.filter((o) =>
+              linhaInteira(corpo, mapa[o], mapa[o + agulha.length - 1] + 1)
+            );
+            return sozinhas.length === 1 ? sozinhas[0] : -1;
+          })();
+    if (escolhida < 0) continue;
+
+    const ini = mapa[escolhida];
+    const fim = mapa[escolhida + agulha.length - 1] + 1;
     // Nao atravessa quebra de paragrafo (viraria tag aberta em dois <p>)
     // nem trecho que ja recebeu formatacao.
     if (corpo.slice(ini, fim).includes("\n")) continue;
