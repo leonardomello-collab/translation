@@ -193,6 +193,8 @@ function publicadoEmIso(iso: string | null | undefined): string | null {
 }
 
 // Objeto no formato de importação do Strapi: { locale, fields: { … } }.
+// Os nomes seguem os campos de api::noticia.noticia no CMS: title,
+// highlightTitle, slug, summary, bodyRichText, postPublishedAt e seo.
 // Campos de OG e Twitter ficam vazios por decisão editorial; a categoria
 // não viaja no JSON e é atribuída na importação.
 function paraStrapi(locale: string, v: Versao, imagens: Imagem[], publicado_em: string | null) {
@@ -203,9 +205,13 @@ function paraStrapi(locale: string, v: Versao, imagens: Imagem[], publicado_em: 
     locale,
     fields: {
       title: v.titulo ?? '',
+      // "Título de destaque": título curto dos banners automáticos. Sai
+      // vazio — o CMS usa o título normal nesse caso — porque a extração não
+      // produz uma versão curta do título.
+      highlightTitle: '',
       slug,
       summary: v.subtitulo || v.descricao || '',
-      publishedAt: publicadoEmIso(publicado_em),
+      postPublishedAt: publicadoEmIso(publicado_em),
       bodyRichText: montarBodyRichText(v.corpo ?? '', imagens),
       seo: {
         metaTitle: v.titulo ?? '',
