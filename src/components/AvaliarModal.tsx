@@ -169,6 +169,15 @@ export function AvaliarModal({ group_id, onClose, onDecidir, onNav }: Props) {
                           <Field label="Título">
                             <p className="text-white font-semibold leading-snug">{v.titulo || '—'}</p>
                           </Field>
+                          <Field label="Título de destaque">
+                            {v.titulo_destaque ? (
+                              <p className="text-gray-200 leading-relaxed">{v.titulo_destaque}</p>
+                            ) : (
+                              <p className="text-gray-600 italic text-xs">
+                                vazio — o banner usa o título normal
+                              </p>
+                            )}
+                          </Field>
                           <Field label="Subtítulo">
                             {v.subtitulo ? (
                               <p className="text-gray-200 leading-relaxed">{v.subtitulo}</p>

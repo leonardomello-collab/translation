@@ -443,7 +443,15 @@ async function processarUrl(
     existente?.group_id ?? `flanews_${today}_${tempSlug.slice(0, 40)}_${hash6}`;
 
   // PARTE 1: Extracao
-  const userMsg1 = `URL: ${url_origem}\ngroup_id sugerido: ${group_id}\n\nHTML:\n${cleanedHtml}`;
+  // O formato de saida dos agentes fica na Tess, fora deste repositorio; o
+  // campo extra e pedido aqui, no texto do pedido, e tratado como opcional:
+  // se nao vier, o titulo de destaque sai vazio e o CMS usa o titulo normal.
+  const instrucaoDestaque =
+    'TITULO DE DESTAQUE: inclua em cada idioma, dentro de "versoes", o campo ' +
+    '"titulo_destaque": versao curta do titulo para banner, de ate 60 ' +
+    'caracteres, no idioma daquela versao, sem ponto final. Se nao der para ' +
+    'encurtar sem perder o sentido, devolva string vazia.';
+  const userMsg1 = `URL: ${url_origem}\ngroup_id sugerido: ${group_id}\n\n${instrucaoDestaque}\n\nHTML:\n${cleanedHtml}`;
   const text1 = await callTessAgent(TESS_AGENT_EXTRACAO, userMsg1);
   const parte1 = extractJson(text1);
   parte1.url_origem = url_origem;
@@ -478,7 +486,7 @@ async function processarUrl(
     "<a href=\"...\"> e <br>. Mantenha cada uma delas em volta do trecho " +
     "equivalente na traducao, sem acrescentar outras tags e sem traduzir o " +
     "endereco dos links.";
-  const userMsg2 = `JSON da Parte 1:\n${JSON.stringify(parte1)}\n\n${instrucaoFormatacao}\n\nReferencias EN:\n${refsEn.join("\n") || "(nenhuma)"}\n\nReferencias ES:\n${refsEs.join("\n") || "(nenhuma)"}`;
+  const userMsg2 = `JSON da Parte 1:\n${JSON.stringify(parte1)}\n\n${instrucaoFormatacao}\n\n${instrucaoDestaque}\n\nReferencias EN:\n${refsEn.join("\n") || "(nenhuma)"}\n\nReferencias ES:\n${refsEs.join("\n") || "(nenhuma)"}`;
   const text2 = await callTessAgent(TESS_AGENT_TRADUCAO, userMsg2);
   const parte2 = extractJson(text2);
 
@@ -509,6 +517,18 @@ async function processarUrl(
   return { group_id: parte2.group_id };
 }
 
+// O titulo de destaque e opcional e vem de um campo extra pedido no texto do
+// prompt: aceita so string curta. Titulo longo demais (o agente devolvendo o
+// titulo inteiro) e tratado como ausente, porque o CMS ja cai no titulo
+// normal quando o campo fica vazio.
+const LIMITE_DESTAQUE = 90;
+
+function tituloDestaque(v: any): string | null {
+  const t = typeof v?.titulo_destaque === "string" ? v.titulo_destaque.trim() : "";
+  if (!t || t.length > LIMITE_DESTAQUE) return null;
+  return t;
+}
+
 async function persistir(data: any) {
   const { group_id, url_origem, publicado_em, imagens, versoes, notas_extracao } = data;
 
@@ -532,6 +552,7 @@ async function persistir(data: any) {
       palavras_chave: v.palavras_chave ?? [],
       url_personalizada: v.url_personalizada ?? "",
       categoria: v.categoria ?? "",
+      titulo_destaque: tituloDestaque(v),
     })
   );
   if (versoesRows.length) await supabase.from("versoes").insert(versoesRows);

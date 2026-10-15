@@ -21,6 +21,7 @@ export async function carregarNoticiaCompleta(group_id: string) {
       palavras_chave: v.palavras_chave,
       url_personalizada: v.url_personalizada,
       categoria: v.categoria,
+      titulo_destaque: v.titulo_destaque,
     };
   });
 
@@ -205,10 +206,10 @@ function paraStrapi(locale: string, v: Versao, imagens: Imagem[], publicado_em: 
     locale,
     fields: {
       title: v.titulo ?? '',
-      // "Título de destaque": título curto dos banners automáticos. Sai
-      // vazio — o CMS usa o título normal nesse caso — porque a extração não
-      // produz uma versão curta do título.
-      highlightTitle: '',
+      // "Título de destaque": título curto dos banners automáticos, no idioma
+      // do arquivo. Vazio quando a extração não produziu um — nesse caso o
+      // CMS usa o título normal.
+      highlightTitle: v.titulo_destaque ?? '',
       slug,
       summary: v.subtitulo || v.descricao || '',
       postPublishedAt: publicadoEmIso(publicado_em),
