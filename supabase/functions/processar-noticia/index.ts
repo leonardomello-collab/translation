@@ -446,6 +446,11 @@ async function processarUrl(
   // O formato de saida dos agentes fica na Tess, fora deste repositorio; o
   // campo extra e pedido aqui, no texto do pedido, e tratado como opcional:
   // se nao vier, o titulo de destaque sai vazio e o CMS usa o titulo normal.
+  const instrucaoApelidos =
+    'APELIDOS DO CLUBE: sao nomes proprios e nao se traduzem. Em espanhol e ' +
+    'ingles escreva sempre "Rubro-Negro" (nunca "Rojo-Negro", "rojinegro" ou ' +
+    '"Red-Black") e "Mengao" com til: "Mengão". Nao chame o Flamengo de ' +
+    '"el Rojo" em espanhol — esse e o apelido do Independiente.';
   const instrucaoDestaque =
     'TITULO DE DESTAQUE: inclua em cada idioma, dentro de "versoes", o campo ' +
     '"titulo_destaque": versao curta do titulo para banner, de ate 60 ' +
@@ -486,7 +491,7 @@ async function processarUrl(
     "<a href=\"...\"> e <br>. Mantenha cada uma delas em volta do trecho " +
     "equivalente na traducao, sem acrescentar outras tags e sem traduzir o " +
     "endereco dos links.";
-  const userMsg2 = `JSON da Parte 1:\n${JSON.stringify(parte1)}\n\n${instrucaoFormatacao}\n\n${instrucaoDestaque}\n\nReferencias EN:\n${refsEn.join("\n") || "(nenhuma)"}\n\nReferencias ES:\n${refsEs.join("\n") || "(nenhuma)"}`;
+  const userMsg2 = `JSON da Parte 1:\n${JSON.stringify(parte1)}\n\n${instrucaoFormatacao}\n\n${instrucaoDestaque}\n\n${instrucaoApelidos}\n\nReferencias EN:\n${refsEn.join("\n") || "(nenhuma)"}\n\nReferencias ES:\n${refsEs.join("\n") || "(nenhuma)"}`;
   const text2 = await callTessAgent(TESS_AGENT_TRADUCAO, userMsg2);
   const parte2 = extractJson(text2);
 
@@ -517,6 +522,22 @@ async function processarUrl(
   return { group_id: parte2.group_id };
 }
 
+// A instrucao no prompt pede a forma certa dos apelidos; isto aqui garante.
+// So trata o que foi observado na saida da Tess em espanhol: "Rojo-Negro" e
+// "rojinegro" (traducao literal de Rubro-Negro) e "Mengao" sem o til. Como
+// toda materia e sobre o Flamengo, o apelido solto no texto e sempre dele.
+// Nao mexe em "el Rojo", que tambem e apelido do Independiente: ali a
+// correcao depende do contexto e fica so no prompt.
+export function normalizarApelidos(texto: string): string {
+  if (!texto) return texto;
+  const rubro = (r: string, fim: string) =>
+    r === "R" ? `Rubro-Negr${fim}` : `rubro-negr${fim}`;
+  return texto
+    .replace(/\b([Rr])ojo-[Nn]egr([oa]s?)\b/g, (_, r, fim) => rubro(r, fim))
+    .replace(/\b([Rr])oji-?negr([oa]s?)\b/g, (_, r, fim) => rubro(r, fim))
+    .replace(/\bMengao\b/g, "Mengão");
+}
+
 // O titulo de destaque e opcional e vem de um campo extra pedido no texto do
 // prompt: aceita so string curta. Titulo longo demais (o agente devolvendo o
 // titulo inteiro) e tratado como ausente, porque o CMS ja cai no titulo
@@ -545,11 +566,14 @@ async function persistir(data: any) {
     ([idioma, v]: any) => ({
       group_id,
       idioma,
-      titulo: v.titulo ?? "",
-      subtitulo: v.subtitulo ?? null,
-      corpo: v.corpo ?? "",
-      descricao: v.descricao ?? "",
-      palavras_chave: v.palavras_chave ?? [],
+      titulo: normalizarApelidos(v.titulo ?? ""),
+      subtitulo: v.subtitulo ? normalizarApelidos(v.subtitulo) : null,
+      corpo: normalizarApelidos(v.corpo ?? ""),
+      descricao: normalizarApelidos(v.descricao ?? ""),
+      palavras_chave: (v.palavras_chave ?? []).map((k: string) =>
+        normalizarApelidos(k)
+      ),
+      // A URL fica de fora: o slug nao leva acento nem segue o apelido.
       url_personalizada: v.url_personalizada ?? "",
       categoria: v.categoria ?? "",
       titulo_destaque: tituloDestaque(v),
