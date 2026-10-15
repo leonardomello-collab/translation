@@ -30,6 +30,8 @@ export interface Versao {
   palavras_chave: string[];
   url_personalizada: string;
   categoria: string;
+  // Titulo curto para banner (highlightTitle no CMS); nulo = usa o titulo normal
+  titulo_destaque: string | null;
 }
 
 export interface Imagem {
