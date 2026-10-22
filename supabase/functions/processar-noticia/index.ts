@@ -156,6 +156,8 @@ export interface ImagemInline {
   caption: string | null;
   posicao: number;
   atributos: Record<string, string | null>;
+  // "inline" para imagem, "video" para <video>/<iframe> no meio do texto.
+  role?: "inline" | "video";
 }
 
 // Extrai as imagens do corpo renderizado da materia (div __articleContent),
@@ -191,13 +193,45 @@ export function extrairImagensInline(html: string): ImagemInline[] {
   if (!body) return [];
 
   const blocoRe =
-    /<(p|h[1-6]|ul|ol|blockquote|figure)\b[^>]*>([\s\S]*?)<\/\1>|<img\b[^>]*>/gi;
+    /<(p|h[1-6]|ul|ol|blockquote|figure|video)\b[^>]*>([\s\S]*?)<\/\1>|<img\b[^>]*>|<iframe\b[^>]*>(?:[\s\S]*?<\/iframe>)?/gi;
   const out: ImagemInline[] = [];
   let paragrafos = 0;
   let m: RegExpExecArray | null;
   while ((m = blocoRe.exec(body))) {
     const frag = m[0];
-    const tag = (m[1] ?? "img").toLowerCase();
+    const tag = (m[1] ?? (/^<iframe/i.test(frag) ? "iframe" : "img")).toLowerCase();
+
+    // Video do proprio CMS (<video><source src=...>) ou embed (<iframe>).
+    // Procura dentro do fragmento: na materia o <video> costuma vir
+    // embrulhado num <p>, e o bloco do paragrafo o engoliria.
+    const midia =
+      frag.match(/<video\b[\s\S]*?<\/video>/i)?.[0] ??
+      frag.match(/<iframe\b[^>]*>(?:[\s\S]*?<\/iframe>)?/i)?.[0] ??
+      null;
+    if (midia) {
+      const ehIframe = /^<iframe/i.test(midia);
+      const attr = (n: string) =>
+        midia.match(new RegExp("\\b" + n + '="([^"]*)"', "i"))?.[1] ?? null;
+      const src = attr("src") ?? midia.match(/<source\b[^>]*src="([^"]*)"/i)?.[1] ?? null;
+      if (src) {
+        out.push({
+          url: src,
+          caption: null,
+          posicao: paragrafos,
+          role: "video",
+          atributos: {
+            tipo: ehIframe ? "iframe" : "video",
+            width: attr("width"),
+            height: attr("height"),
+            poster: attr("poster"),
+            mime: midia.match(/<source\b[^>]*type="([^"]*)"/i)?.[1] ?? null,
+            title: attr("title"),
+          },
+        });
+      }
+      continue;
+    }
+
     const img = frag.match(/<img\b[^>]*>/i)?.[0];
     // Um <p> que so embrulha uma imagem (formato do editor do Strapi) conta
     // como bloco de imagem, nao como paragrafo de texto.
@@ -211,6 +245,7 @@ export function extrairImagensInline(html: string): ImagemInline[] {
           url: src,
           caption: cap ? decodeEntities(cap.replace(/<[^>]+>/g, "")).trim() || null : null,
           posicao: paragrafos,
+          role: "inline",
           atributos: {
             alt: attr("alt"),
             width: attr("width"),
@@ -240,6 +275,11 @@ export interface SpanFormatado {
   tipo: "strong" | "em" | "u" | "a";
   texto: string;
   href?: string;
+  // Em qual aparicao desse texto na materia o trecho estava (0 = primeira) e
+  // quantas aparicoes a materia tem no total. Serve para desempatar quando o
+  // mesmo texto se repete: "FlamengoTV" aparece 3x e so a 2a era link.
+  ocorrencia?: number;
+  totalNaMateria?: number;
 }
 
 export function extrairSpansFormatados(html: string): SpanFormatado[] {
@@ -247,6 +287,17 @@ export function extrairSpansFormatados(html: string): SpanFormatado[] {
   if (!body) return [];
   const limpar = (x: string) =>
     decodeEntities(x.replace(/<[^>]+>/g, "")).replace(/\s+/g, " ").trim();
+  // Texto corrido da materia, para saber em que aparicao cada trecho estava.
+  const textoFonte = normalizarComMapa(limpar(body)).norm;
+  const ocorrenciasAte = (fim: number, agulha: string) => {
+    if (!agulha) return { indice: 0, total: 0 };
+    const antes = normalizarComMapa(limpar(body.slice(0, fim))).norm;
+    let indice = 0;
+    for (let i = antes.indexOf(agulha); i >= 0; i = antes.indexOf(agulha, i + 1)) indice++;
+    let total = 0;
+    for (let i = textoFonte.indexOf(agulha); i >= 0; i = textoFonte.indexOf(agulha, i + 1)) total++;
+    return { indice, total };
+  };
   const out: SpanFormatado[] = [];
   const equivalente: Record<string, SpanFormatado["tipo"]> = {
     strong: "strong",
@@ -261,7 +312,10 @@ export function extrairSpansFormatados(html: string): SpanFormatado[] {
   while ((m = inline.exec(body))) {
     const tipo = equivalente[m[1].toLowerCase()];
     const texto = limpar(m[2]);
-    if (tipo && texto.length >= 2) out.push({ tipo, texto });
+    if (tipo && texto.length >= 2) {
+      const { indice, total } = ocorrenciasAte(m.index, normalizarComMapa(texto).norm);
+      out.push({ tipo, texto, ocorrencia: indice, totalNaMateria: total });
+    }
   }
 
   const link = /<a\b[^>]*href="([^"]+)"[^>]*>([\s\S]*?)<\/a>/gi;
@@ -269,7 +323,8 @@ export function extrairSpansFormatados(html: string): SpanFormatado[] {
     const href = m[1].trim();
     const texto = limpar(m[2]);
     if (texto.length >= 2 && /^https?:\/\//i.test(href)) {
-      out.push({ tipo: "a", texto, href });
+      const { indice, total } = ocorrenciasAte(m.index, normalizarComMapa(texto).norm);
+      out.push({ tipo: "a", texto, href, ocorrencia: indice, totalNaMateria: total });
     }
   }
   return out;
@@ -333,7 +388,7 @@ export function aplicarFormatacao(corpo: string, spans: SpanFormatado[]): string
   // Do trecho mais longo para o mais curto: o titulo de secao inteiro vence o
   // pedaco dele que tambem aparece marcado.
   for (const sp of [...spans].sort((a, b) => b.texto.length - a.texto.length)) {
-    const chave = `${sp.tipo}|${sp.href ?? ""}|${sp.texto}`;
+    const chave = `${sp.tipo}|${sp.href ?? ""}|${sp.texto}|${sp.ocorrencia ?? ""}`;
     if (vistos.has(chave)) continue;
     vistos.add(chave);
 
@@ -354,6 +409,16 @@ export function aplicarFormatacao(corpo: string, spans: SpanFormatado[]): string
       ocorrencias.length === 1
         ? ocorrencias[0]
         : (() => {
+            // Mesma quantidade de aparicoes na materia e no corpo: a n-esima
+            // aqui e a n-esima la. E assim que o 2o link de um texto que se
+            // repete ("FlamengoTV") encontra o lugar certo.
+            if (
+              sp.totalNaMateria === ocorrencias.length &&
+              sp.ocorrencia !== undefined &&
+              sp.ocorrencia < ocorrencias.length
+            ) {
+              return ocorrencias[sp.ocorrencia];
+            }
             const sozinhas = ocorrencias.filter((o) =>
               linhaInteira(corpo, mapa[o], mapa[o + agulha.length - 1] + 1)
             );
@@ -387,6 +452,24 @@ export function aplicarFormatacao(corpo: string, spans: SpanFormatado[]): string
       out.slice(ins.fim);
   }
   return out;
+}
+
+// Alinhamento dominante dos blocos de texto da materia. O editor do CMS grava
+// style="text-align: justify" em cada paragrafo; como o alinhamento nao da
+// para mapear paragrafo a paragrafo entre idiomas (a contagem diverge), vale o
+// que predomina na materia inteira.
+export function alinhamentoDominante(html: string): string | null {
+  const body = corpoDaMateria(html);
+  if (!body) return null;
+  const contagem: Record<string, number> = {};
+  const re = /<(?:p|h[1-6]|li|blockquote)\b[^>]*style="[^"]*text-align:\s*(justify|center|right)/gi;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(body))) {
+    const a = m[1].toLowerCase();
+    contagem[a] = (contagem[a] ?? 0) + 1;
+  }
+  const par = Object.entries(contagem).sort((x, y) => y[1] - x[1])[0];
+  return par ? par[0] : null;
 }
 
 function ogImage(html: string): string | null {
@@ -425,6 +508,7 @@ async function processarUrl(
   const imagensInline = extrairImagensInline(html);
   const capaOg = ogImage(html);
   const spansFormatados = extrairSpansFormatados(html);
+  const alinhamento = alinhamentoDominante(html);
 
   // group_id determinístico e estavel: se a URL ja foi processada antes,
   // reutiliza o group_id existente para nao duplicar a noticia
@@ -491,7 +575,15 @@ async function processarUrl(
     "<a href=\"...\"> e <br>. Mantenha cada uma delas em volta do trecho " +
     "equivalente na traducao, sem acrescentar outras tags e sem traduzir o " +
     "endereco dos links.";
-  const userMsg2 = `JSON da Parte 1:\n${JSON.stringify(parte1)}\n\n${instrucaoFormatacao}\n\n${instrucaoDestaque}\n\n${instrucaoApelidos}\n\nReferencias EN:\n${refsEn.join("\n") || "(nenhuma)"}\n\nReferencias ES:\n${refsEs.join("\n") || "(nenhuma)"}`;
+  const legendasPt = imagensInline.map((i) => i.caption ?? "");
+  const instrucaoLegendas = legendasPt.some((l) => l)
+    ? "LEGENDAS DAS IMAGENS: traduza as legendas numeradas abaixo e devolva no " +
+      'campo "legendas": { "en": ["..."], "es": ["..."] }, na MESMA ordem e com ' +
+      "a mesma quantidade de itens (use string vazia onde a legenda estiver " +
+      "vazia). Credito de foto se mantem: so traduza a parte descritiva.\n" +
+      legendasPt.map((l, i) => `${i}: ${l}`).join("\n")
+    : "";
+  const userMsg2 = `JSON da Parte 1:\n${JSON.stringify(parte1)}\n\n${instrucaoFormatacao}\n\n${instrucaoDestaque}\n\n${instrucaoApelidos}\n\n${instrucaoLegendas}\n\nReferencias EN:\n${refsEn.join("\n") || "(nenhuma)"}\n\nReferencias ES:\n${refsEs.join("\n") || "(nenhuma)"}`;
   const text2 = await callTessAgent(TESS_AGENT_TRADUCAO, userMsg2);
   const parte2 = extractJson(text2);
 
@@ -503,10 +595,23 @@ async function processarUrl(
   // usa o og:image da pagina.
   const capaTess = (parte2.imagens ?? []).find((i: any) => i.role === "cover");
   const capa = capaTess ?? (capaOg ? { url: capaOg, caption: null, role: "cover" } : null);
+  // Legendas traduzidas voltam como arrays na mesma ordem das midias inline.
+  const legendasTraduzidas = (idioma: string): string[] => {
+    const l = parte2.legendas?.[idioma];
+    return Array.isArray(l) ? l.map((x: unknown) => (typeof x === "string" ? x : "")) : [];
+  };
+  const legEn = legendasTraduzidas("en");
+  const legEs = legendasTraduzidas("es");
   parte2.imagens = [
     ...(capa ? [{ ...capa, role: "cover" }] : []),
-    ...imagensInline.map((i) => ({ ...i, role: "inline" })),
+    ...imagensInline.map((i, idx) => ({
+      ...i,
+      role: i.role ?? "inline",
+      caption_en: legEn[idx] || null,
+      caption_es: legEs[idx] || null,
+    })),
   ];
+  parte2.alinhamento_corpo = alinhamento;
   if (!parte2.publicado_em) parte2.publicado_em = parte1.publicado_em;
   if (parte2.versoes && !parte2.versoes["pt-BR"] && parte1.versoes?.["pt-BR"]) {
     parte2.versoes["pt-BR"] = parte1.versoes["pt-BR"];
@@ -552,12 +657,14 @@ function tituloDestaque(v: any): string | null {
 
 async function persistir(data: any) {
   const { group_id, url_origem, publicado_em, imagens, versoes, notas_extracao } = data;
+  const alinhamento_corpo = data.alinhamento_corpo ?? null;
 
   await supabase.from("noticias").upsert({
     group_id,
     url_origem,
     publicado_em: publicado_em ?? null,
     notas_extracao: notas_extracao ?? null,
+    alinhamento_corpo,
     updated_at: new Date().toISOString(),
   });
 
@@ -590,6 +697,8 @@ async function persistir(data: any) {
     ordem: i,
     posicao: img.posicao ?? null,
     atributos: img.atributos ?? null,
+    caption_en: img.caption_en ?? null,
+    caption_es: img.caption_es ?? null,
   }));
   if (imagensRows.length) await supabase.from("imagens").insert(imagensRows);
 }

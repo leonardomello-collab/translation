@@ -62,6 +62,8 @@ export function AvaliacaoPage() {
     (versoesRes.data ?? []).forEach((v: any) => vMap.set(v.group_id, v));
     const iMap = new Map<string, string>();
     (imagensRes.data ?? []).forEach((i: any) => {
+      // Video do corpo nao serve de capa do card
+      if (i.role === 'video') return;
       if (!iMap.has(i.group_id) || i.role === 'cover') iMap.set(i.group_id, i.url);
     });
 
