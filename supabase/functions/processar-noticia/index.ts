@@ -188,6 +188,19 @@ export function corpoDaMateria(html: string): string | null {
   return html.slice(start, end);
 }
 
+// Legenda que vem logo apos o bloco da imagem, num <figure> proprio:
+//   <p><img …></p><section><figure><figcaption>…</figcaption></figure></section>
+// So vale se nao houver texto visivel entre a imagem e a legenda — senao seria
+// a legenda de outra coisa.
+function legendaIrma(body: string, apartirDe: number): string | undefined {
+  const adiante = body.slice(apartirDe, apartirDe + 1200);
+  const fig = adiante.match(/<figcaption[^>]*>([\s\S]*?)<\/figcaption>/i);
+  if (!fig || fig.index === undefined) return undefined;
+  const meio = adiante.slice(0, fig.index).replace(/<[^>]+>/g, "");
+  if (decodeEntities(meio).replace(/\s|&nbsp;/g, "")) return undefined;
+  return fig[1];
+}
+
 export function extrairImagensInline(html: string): ImagemInline[] {
   const body = corpoDaMateria(html);
   if (!body) return [];
@@ -240,7 +253,11 @@ export function extrairImagensInline(html: string): ImagemInline[] {
         img.match(new RegExp("\\b" + n + '="([^"]*)"', "i"))?.[1] ?? null;
       const src = attr("src");
       if (src) {
-        const cap = frag.match(/<figcaption[^>]*>([\s\S]*?)<\/figcaption>/i)?.[1];
+        const cap =
+          frag.match(/<figcaption[^>]*>([\s\S]*?)<\/figcaption>/i)?.[1] ??
+          legendaIrma(body, blocoRe.lastIndex) ??
+          attr("title") ??
+          undefined;
         out.push({
           url: src,
           caption: cap ? decodeEntities(cap.replace(/<[^>]+>/g, "")).trim() || null : null,
