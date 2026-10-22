@@ -14,6 +14,8 @@ export interface Noticia {
   publicado_em: string | null;
   status: Status;
   notas_extracao: string | null;
+  // Alinhamento dominante dos paragrafos na materia em portugues
+  alinhamento_corpo: string | null;
   motivo_reprovacao: string | null;
   created_at: string;
   updated_at: string;
@@ -39,7 +41,11 @@ export interface Imagem {
   group_id: string;
   url: string;
   caption: string | null;
-  role: 'cover' | 'inline';
+  // Legenda traduzida; nulo = usa a legenda em portugues
+  caption_en: string | null;
+  caption_es: string | null;
+  // 'video' cobre <video> do CMS e <iframe> de embed
+  role: 'cover' | 'inline' | 'video';
   ordem: number;
   // Quantos blocos de texto precedem a imagem no corpo; null = desconhecido (linhas antigas)
   posicao: number | null;
@@ -49,6 +55,11 @@ export interface Imagem {
     height?: string | null;
     srcset?: string | null;
     sizes?: string | null;
+    // só para role 'video'
+    tipo?: string | null;
+    mime?: string | null;
+    poster?: string | null;
+    title?: string | null;
   } | null;
 }
 

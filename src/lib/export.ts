@@ -74,6 +74,7 @@ async function carregarLote(group_ids: string[]) {
         url_origem: n.url_origem,
         publicado_em: n.publicado_em,
         status: n.status,
+        alinhamento_corpo: n.alinhamento_corpo ?? null,
         versoes: vMap.get(id) ?? {},
         imagens: iMap.get(id) ?? [],
         notas_extracao: n.notas_extracao ?? null,
@@ -118,19 +119,29 @@ function escapeText(s: string): string {
 // Em qualquer caminho o conteúdo passa pelo sanitizador: só a formatação da
 // lista permitida sobrevive, o resto vira texto.
 const BLOCO_RE = /<(p|h[1-6]|ul|ol|blockquote)\b[^>]*>([\s\S]*?)<\/\1>/gi;
+const ALINHAMENTOS = ['justify', 'center', 'right'] as const;
 
-function corpoEmParagrafos(corpo: string): string[] {
+// O editor do CMS guarda o alinhamento em style no próprio parágrafo. Como a
+// matéria em português costuma ser toda justificada, o alinhamento vem por
+// matéria e é reaplicado em todos os blocos de texto da tradução.
+function estiloAlinhamento(alinhamento: string | null | undefined): string {
+  const a = (alinhamento ?? '').toLowerCase();
+  return (ALINHAMENTOS as readonly string[]).includes(a) ? ` style="text-align: ${a}"` : '';
+}
+
+function corpoEmParagrafos(corpo: string, alinhamento?: string | null): string[] {
+  const estilo = estiloAlinhamento(alinhamento);
   if (/<(p|h[1-6]|ul|ol|blockquote)[\s>]/i.test(corpo)) {
     return [...corpo.matchAll(BLOCO_RE)].map((m) => {
       const tag = m[1].toLowerCase();
-      return `<${tag}>${sanitizeInline(m[2])}</${tag}>`;
+      return `<${tag}${estilo}>${sanitizeInline(m[2])}</${tag}>`;
     });
   }
   return corpo
     .split(/\r?\n+/)
     .map((p) => p.trim())
     .filter(Boolean)
-    .map((p) => `<p>${sanitizeInline(p)}</p>`);
+    .map((p) => `<p${estilo}>${sanitizeInline(p)}</p>`);
 }
 
 // srcset no padrão que o editor do Strapi grava: a mesma URL repetida nas
@@ -139,9 +150,36 @@ function srcsetPadrao(url: string): string {
   return [117, 375, 562, 750].map((w) => `${url} ${w}w`).join(',') + ',';
 }
 
+// Bloco de vídeo: <video> do próprio CMS ou <iframe> de embed, como estão na
+// matéria em português.
+function blocoVideo(v: Imagem): string {
+  const at = v.atributos ?? {};
+  const dim = [
+    at.width ? `width="${escapeHtml(String(at.width))}"` : '',
+    at.height ? `height="${escapeHtml(String(at.height))}"` : '',
+  ].filter(Boolean).join(' ');
+  if (at.tipo === 'iframe') {
+    const titulo = at.title ? ` title="${escapeHtml(at.title)}"` : '';
+    return `<p><iframe src="${escapeHtml(v.url)}"${titulo} ${dim} frameborder="0" allowfullscreen></iframe></p>`;
+  }
+  const poster = at.poster ? ` poster="${escapeHtml(at.poster)}"` : '';
+  const mime = at.mime ? ` type="${escapeHtml(at.mime)}"` : '';
+  return (
+    `<p><video controls ${dim}${poster}>` +
+    `<source src="${escapeHtml(v.url)}"${mime}></video></p>`
+  );
+}
+
 // Bloco de imagem no formato de importação do Strapi:
 // <p><img …><figcaption>…</figcaption></p>
-function blocoImagem(img: Imagem): string {
+// Legenda no idioma do arquivo; sem tradução, mantém a de português.
+function legendaDoIdioma(img: Imagem, locale: string): string | null {
+  if (locale === 'en') return img.caption_en || img.caption;
+  if (locale === 'es') return img.caption_es || img.caption;
+  return img.caption;
+}
+
+function blocoImagem(img: Imagem, locale: string): string {
   const at = img.atributos ?? {};
   const attrs = [
     `src="${escapeHtml(img.url)}"`,
@@ -153,17 +191,23 @@ function blocoImagem(img: Imagem): string {
   ]
     .filter(Boolean)
     .join(' ');
-  const cap = img.caption ? `<figcaption>${escapeText(img.caption)}</figcaption>` : '';
+  const legenda = legendaDoIdioma(img, locale);
+  const cap = legenda ? `<figcaption>${escapeText(legenda)}</figcaption>` : '';
   return `<p><img ${attrs}>${cap}</p>`;
 }
 
 // Monta o bodyRichText: parágrafos do corpo traduzido com as imagens inline
 // reinseridas onde estavam na matéria original (campo posicao = quantos
 // parágrafos vêm antes). Imagem sem posição conhecida vai para o fim.
-function montarBodyRichText(corpo: string, imagens: Imagem[]): string {
-  const paras = corpoEmParagrafos(corpo ?? '');
+function montarBodyRichText(
+  corpo: string,
+  imagens: Imagem[],
+  locale: string,
+  alinhamento?: string | null
+): string {
+  const paras = corpoEmParagrafos(corpo ?? '', alinhamento);
   const inline = imagens
-    .filter((i) => i.role === 'inline')
+    .filter((i) => i.role === 'inline' || i.role === 'video')
     .map((i, idx) => ({ ...i, _ordem: i.ordem ?? idx }))
     .sort((a, b) => (a.posicao ?? Infinity) - (b.posicao ?? Infinity) || a._ordem - b._ordem);
 
@@ -172,7 +216,7 @@ function montarBodyRichText(corpo: string, imagens: Imagem[]): string {
   for (const img of inline) {
     const alvo = Math.min(img.posicao ?? paras.length, paras.length);
     while (cursor < alvo) out.push(paras[cursor++]);
-    out.push(blocoImagem(img));
+    out.push(img.role === 'video' ? blocoVideo(img) : blocoImagem(img, locale));
   }
   while (cursor < paras.length) out.push(paras[cursor++]);
   return out.join('');
@@ -198,7 +242,13 @@ function publicadoEmIso(iso: string | null | undefined): string | null {
 // highlightTitle, slug, summary, bodyRichText, postPublishedAt e seo.
 // Campos de OG e Twitter ficam vazios por decisão editorial; a categoria
 // não viaja no JSON e é atribuída na importação.
-function paraStrapi(locale: string, v: Versao, imagens: Imagem[], publicado_em: string | null) {
+function paraStrapi(
+  locale: string,
+  v: Versao,
+  imagens: Imagem[],
+  publicado_em: string | null,
+  alinhamento?: string | null
+) {
   // Só o último trecho do caminho: "news/football/abc-def" -> "abc-def".
   // O prefixo de seção é definido pelo próprio CMS na importação.
   const slug = (v.url_personalizada || '').split('/').filter(Boolean).pop() ?? '';
@@ -213,7 +263,7 @@ function paraStrapi(locale: string, v: Versao, imagens: Imagem[], publicado_em: 
       slug,
       summary: v.subtitulo || v.descricao || '',
       postPublishedAt: publicadoEmIso(publicado_em),
-      bodyRichText: montarBodyRichText(v.corpo ?? '', imagens),
+      bodyRichText: montarBodyRichText(v.corpo ?? '', imagens, locale, alinhamento),
       seo: {
         metaTitle: v.titulo ?? '',
         metaDescription: v.descricao ?? '',
@@ -232,10 +282,15 @@ function arquivosDaNoticia(n: {
   versoes: Record<string, Versao>;
   imagens: Imagem[];
   publicado_em?: string | null;
+  alinhamento_corpo?: string | null;
 }) {
   return LOCALES.filter((l) => n.versoes[l]).map((l) => ({
     name: `${n.group_id}-${l}.json`,
-    content: JSON.stringify(paraStrapi(l, n.versoes[l], n.imagens, n.publicado_em ?? null), null, 2),
+    content: JSON.stringify(
+      paraStrapi(l, n.versoes[l], n.imagens, n.publicado_em ?? null, n.alinhamento_corpo ?? null),
+      null,
+      2
+    ),
   }));
 }
 
