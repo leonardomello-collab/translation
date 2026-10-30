@@ -1,4 +1,5 @@
 // processar-noticia — traducao automatica de noticias via Tess
+// redeploy 2026-10-30
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import { createClient } from "npm:@supabase/supabase-js@2.57.4";
 
