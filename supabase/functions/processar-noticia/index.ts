@@ -502,6 +502,44 @@ function ogImage(html: string): string | null {
   );
 }
 
+// --- Guia de tom --------------------------------------------------------
+// As URLs de referencia so existem como lista de links no prompt: quem tenta
+// abri-las e o agente, e em ~5% das materias elas voltam 403/429 (bloqueio de
+// IP de datacenter nos sites dos clubes). Nessas, a calibragem some e o texto
+// sai generico. Alem disso, Manchester United e Racing renderizam por
+// JavaScript: 4 das 19 referencias nao entregam texto nenhum nem quando
+// respondem 200.
+//
+// Por isso o tom vai junto no prompt, escrito a partir da leitura dessas
+// mesmas referencias (out/2026). Isso nao substitui os links; e a garantia de
+// que a calibragem existe mesmo quando eles nao abrem.
+const GUIA_TOM_EN = [
+  "GUIA DE TOM (EN) — extraido das referencias (Liverpool, Man City, Arsenal):",
+  "- Lead de uma frase, factual, com resultado e contexto: \"Pep Guardiola's last game as Manchester City manager ended in a 2-1 defeat to Aston Villa on an emotional day at the Etihad Stadium.\"",
+  "- Clube no plural: \"Flamengo have won\", \"Flamengo travel to\", \"the side are\". Nunca \"Flamengo has\".",
+  "- Apelido Rubro-Negro preservado como nome proprio; alternativas naturais sao \"the club\" e \"Jardim's men/side\". Nao use apelidos brasileiros opacos (Mengao, Mais Querido, Peixe) em ingles.",
+  "- Placar como \"a 2-1 win\" / \"a 2-1 defeat\"; confronto em titulo com \"v\": \"Flamengo v Santos: Team news\".",
+  "- Data e hora por extenso com fuso: \"Sunday August 9\", \"7.30pm BRT\".",
+  "- Vocabulario: head coach, squad, fixture, campaign, matchday, silverware, season ticket holders, clinch, unbeaten run.",
+  "- Aproveitamento de pontos NAO e \"conversion rate\" (isso e finalizacao): use \"took 64.3% of the available points\" ou \"points tally\".",
+  "- Gols marcados sao \"goals scored\"; \"goal difference\" e saldo — nao troque um pelo outro.",
+  "- Paragrafos curtos, piramide invertida, aspas duplas no corpo.",
+].join("\n");
+
+const GUIA_TOM_ES = [
+  "GUIA DE TOM (ES, rioplatense) — extraido das referencias (Boca, Independiente, Racing):",
+  "- Lead de uma frase resumindo: \"Boca perdio 1-0 ante Universidad Catolica y jugara la Copa Sudamericana en el segundo semestre.\"",
+  "- Use \"ante\" para adversario (\"perdio 1-0 ante\", \"el reves ante Quimsa\"), nao \"contra\".",
+  "- Rodada e \"fecha\" (\"la 15a fecha\"), nao \"jornada\".",
+  "- Placar: \"gano 94-83\", \"le gano 2-1 a Tigre\", \"quedo tercero en su zona\".",
+  "- Apelidos do clube sao nomes proprios: \"Rubro-Negro\" e \"Mengao\" (com til). Nunca \"Rojo-Negro\", \"rojinegro\" nem \"el Rojo\" — este ultimo e o Independiente.",
+  "- Nomes proprios de competicao e estadio ficam: Maracana, Libertadores, Brasileirao, Carioca. Traduza so a parte generica (Copa, Campeonato).",
+  "- Escalacao no formato das referencias: \"Leonardo Jardim dispuso esta formacion: Rossi; Varela, Leo Pereira...\" (ponto e virgula separando as linhas).",
+  "- Estatistica entre parenteses junto ao nome: \"el guardia Michael Smith (22 puntos)\".",
+  "- Tom semiformal e narrativo, sem exagero: \"numeros expresivos\", nao \"numeros de ensueno\".",
+  "- Evite calcos do portugues: \"ha sacudido las redes\" ou \"ha marcado\", nunca \"ha balanceado las redes\"; \"segunda rueda\", nao \"segundo turno\".",
+].join("\n");
+
 async function processarUrl(
   url_origem: string,
   refsEn: string[],
@@ -626,7 +664,7 @@ async function processarUrl(
       "vazia). Credito de foto se mantem: so traduza a parte descritiva.\n" +
       legendasPt.map((l, i) => `${i}: ${l}`).join("\n")
     : "";
-  const userMsg2 = `JSON da Parte 1:\n${JSON.stringify(parte1)}\n\n${instrucaoFormatacao}\n\n${instrucaoDestaque}\n\n${instrucaoApelidos}\n\n${instrucaoLegendas}\n\nReferencias EN:\n${refsEn.join("\n") || "(nenhuma)"}\n\nReferencias ES:\n${refsEs.join("\n") || "(nenhuma)"}`;
+  const userMsg2 = `JSON da Parte 1:\n${JSON.stringify(parte1)}\n\n${instrucaoFormatacao}\n\n${instrucaoDestaque}\n\n${instrucaoApelidos}\n\n${instrucaoLegendas}\n\n${GUIA_TOM_EN}\n\n${GUIA_TOM_ES}\n\nReferencias EN (se nao abrirem, vale o guia acima):\n${refsEn.join("\n") || "(nenhuma)"}\n\nReferencias ES (se nao abrirem, vale o guia acima):\n${refsEs.join("\n") || "(nenhuma)"}`;
   const text2 = await callTessAgent(TESS_AGENT_TRADUCAO, userMsg2);
   const parte2 = extractJson(text2);
 
