@@ -165,8 +165,12 @@ export interface ImagemInline {
 // permite reinserir a imagem no lugar certo do texto traduzido na exportacao.
 // Deterministico: nao passa pela Tess, que nao preserva a posicao.
 // Recorte do HTML que corresponde ao corpo renderizado da materia.
+// O site gera a classe com um hash que ja mudou de formato: antes
+// "...-module__9x993W__articleContent" (dois underscores), em 29/10/2026 virou
+// "KU7MNa_articleContent" (um). Casa so por "articleContent" para nao quebrar
+// de novo no proximo deploy do site.
 export function corpoDaMateria(html: string): string | null {
-  const open = html.match(/<div[^>]*class="[^"]*__articleContent[^"]*"[^>]*>/);
+  const open = html.match(/<div[^>]*class="[^"]*articleContent[^"]*"[^>]*>/i);
   if (!open || open.index === undefined) return null;
   const start = open.index;
 
@@ -524,8 +528,29 @@ async function processarUrl(
   const cleanedHtml = limparHtml(html).slice(0, 80000);
   const imagensInline = extrairImagensInline(html);
   const capaOg = ogImage(html);
+  // O site responde 200 mesmo quando a materia nao existe mais (slug trocado
+  // ou despublicada), servindo uma tela "Not found". Sem checar isso, a
+  // materia entraria vazia na fila.
+  if (/<title>\s*Not found\s*<\/title>/i.test(html)) {
+    throw new Error(
+      "A pagina respondeu 'Not found'. A materia pode ter sido despublicada ou " +
+        "ter mudado de endereco. Confira a URL no site."
+    );
+  }
+
   const spansFormatados = extrairSpansFormatados(html);
   const alinhamento = alinhamentoDominante(html);
+
+  // Sem o corpo localizado, toda a camada deterministica (imagem, video,
+  // negrito, legenda, alinhamento) sai vazia e a traducao ainda assim
+  // "funciona" — foi assim que a troca de classes do site passou dias sem ser
+  // notada. Entao isso vira aviso visivel na avaliacao.
+  const corpoLocalizado = corpoDaMateria(html) !== null;
+  const avisoEstrutura = corpoLocalizado
+    ? ""
+    : "ATENCAO: o corpo da materia nao foi localizado no HTML da pagina (o " +
+      "site pode ter mudado a marcacao). Imagens, video, negrito, legendas e " +
+      "alinhamento NAO foram extraidos desta materia.";
 
   // group_id determinístico e estavel: se a URL ja foi processada antes,
   // reutiliza o group_id existente para nao duplicar a noticia
@@ -607,6 +632,11 @@ async function processarUrl(
   parte2.url_origem = url_origem;
   parte2.group_id = parte1.group_id;
   if (!parte2.imagens) parte2.imagens = parte1.imagens;
+  if (avisoEstrutura) {
+    parte2.notas_extracao = [avisoEstrutura, parte2.notas_extracao ?? parte1.notas_extracao ?? ""]
+      .filter(Boolean)
+      .join("\n");
+  }
   // Substitui as imagens inline da Tess pelas extraidas do HTML, que trazem
   // posicao e atributos. A capa segue vindo da Tess; se ela nao marcar uma,
   // usa o og:image da pagina.

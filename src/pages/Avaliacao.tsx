@@ -13,6 +13,8 @@ interface Row {
   categoria: string;
   publicado_em: string | null;
   cover: string | null;
+  // Extração sem o corpo da matéria: faltam imagem, vídeo, negrito e legenda
+  alerta: boolean;
 }
 
 type Counts = Record<Status, number>;
@@ -38,7 +40,7 @@ export function AvaliacaoPage() {
 
     const { data: noticias } = await supabase
       .from('noticias')
-      .select('group_id, publicado_em, status')
+      .select('group_id, publicado_em, status, notas_extracao')
       .eq('status', tab)
       .order('created_at', { ascending: false });
 
@@ -73,6 +75,7 @@ export function AvaliacaoPage() {
       categoria: vMap.get(n.group_id)?.categoria ?? '',
       publicado_em: n.publicado_em,
       cover: iMap.get(n.group_id) ?? null,
+      alerta: (n.notas_extracao ?? '').startsWith('ATENCAO'),
     }));
 
     setRows(merged);
@@ -398,6 +401,7 @@ export function AvaliacaoPage() {
               onExportCsv={() => exportarCsv(r.group_id)}
               aprovada={tab === 'aprovado'}
               onSeo={() => setSeoDe(r.group_id)}
+              alerta={r.alerta}
             />
           ))}
         </div>

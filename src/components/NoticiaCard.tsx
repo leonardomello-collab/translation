@@ -1,4 +1,4 @@
-import { Eye, Trash2, Download, FileJson, FileSpreadsheet, ChevronDown, ImageOff, Check, Search } from 'lucide-react';
+import { Eye, Trash2, Download, FileJson, FileSpreadsheet, ChevronDown, ImageOff, Check, Search, AlertTriangle } from 'lucide-react';
 import { useState } from 'react';
 
 interface Props {
@@ -16,6 +16,8 @@ interface Props {
   // Aprovada é definitiva: some o Avaliar (e a exclusão) e entra o Checar SEO
   aprovada?: boolean;
   onSeo?: () => void;
+  // Extração não achou o corpo da matéria: faltam imagem, vídeo e negrito
+  alerta?: boolean;
 }
 
 export function NoticiaCard(props: Props) {
@@ -65,6 +67,15 @@ export function NoticiaCard(props: Props) {
         {props.categoria && (
           <span className="absolute top-3 left-3 px-2.5 py-1 bg-red-600/90 text-white text-[10px] font-bold uppercase tracking-wider rounded backdrop-blur">
             {props.categoria}
+          </span>
+        )}
+        {props.alerta && (
+          <span
+            className="absolute bottom-3 left-3 flex items-center gap-1 px-2 py-1 bg-amber-500/90 text-black text-[10px] font-bold uppercase tracking-wider rounded backdrop-blur"
+            title="A extração não localizou o corpo da matéria: imagens, vídeo, negrito e legendas não foram extraídos"
+          >
+            <AlertTriangle className="w-3 h-3" />
+            Sem mídia
           </span>
         )}
       </div>
