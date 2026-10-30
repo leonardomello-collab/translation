@@ -1,0 +1,13 @@
+{
+  "projectId": "66535975",
+  "functions": {
+    "processar-noticia": {
+      "hasChanged": false,
+      "hash": "6612a1fe9c55f0b0ae1d8d0470e14560a733db4a5ae92b7e69a3d61e2627fd3a"
+    },
+    "traduzir-documento": {
+      "hasChanged": false,
+      "hash": "97752ef22851bc9d4817621e318a9345773c945f739cecc4ee3e9477d0c95fcf"
+    }
+  }
+}
