@@ -645,12 +645,16 @@ async function processarUrl(
     '"Red-Black") e "Mengao" com til: "Mengão". Nao chame o Flamengo de ' +
     '"el Rojo" em espanhol — esse e o apelido do Independiente.';
   const instrucaoFidelidade =
-    "FIDELIDADE: traduza o que esta no original. NAO acrescente no titulo nem " +
-    "no titulo de destaque informacao que nao esteja no titulo em portugues — " +
-    "placar, numero de rodada, valores, datas, nomes ou adjetivo de avaliacao " +
-    "(crise, historico, brilhante). Reformatar o que ja existe e permitido " +
-    '(ex.: "02/11 a 08/11" -> "November 2-8"). O mesmo vale para o corpo: ' +
-    "nenhum dado novo.";
+    "FIDELIDADE DO TITULO (regra dura): o titulo e o titulo de destaque " +
+    "traduzidos nao podem conter nenhum numero, nome ou adjetivo que nao " +
+    "esteja no titulo em portugues. Se o titulo em portugues nao traz o " +
+    "placar, a traducao tambem nao traz, mesmo que o placar esteja no corpo.\n" +
+    "ERRADO: pt \"Flamengo vence o Caxias e conquista segunda vitoria\" -> es " +
+    '"Flamengo gano 77-59 ante Caxias..." (placar inventado).\n' +
+    'CERTO: es "Flamengo vence a Caxias y logra su segunda victoria".\n' +
+    "Tambem nao acrescente adjetivo de avaliacao que nao exista no original " +
+    '(crise, historico, convincente, brilhante). Reformatar o que ja existe e ' +
+    'permitido: "02/11 a 08/11" -> "November 2-8". No corpo, nenhum dado novo.';
   const instrucaoDestaque =
     'TITULO DE DESTAQUE: inclua em cada idioma, dentro de "versoes", o campo ' +
     '"titulo_destaque": versao curta do titulo para banner, de ate 60 ' +
@@ -738,6 +742,36 @@ async function processarUrl(
   if (parte2.versoes && !parte2.versoes["pt-BR"] && parte1.versoes?.["pt-BR"]) {
     parte2.versoes["pt-BR"] = parte1.versoes["pt-BR"];
   }
+  // A instrucao de fidelidade nao segura sozinha (o espanhol voltou a por o
+  // placar no titulo mesmo com a regra escrita). Entao a violacao vira aviso
+  // visivel na avaliacao, em vez de passar batido para o CMS.
+  const titulosComDadoNovo = (() => {
+    const pt = parte2.versoes?.["pt-BR"];
+    if (!pt) return [];
+    const numerosPt = new Set(
+      `${pt.titulo ?? ""} ${pt.titulo_destaque ?? ""}`.match(/\d+/g) ?? []
+    );
+    const achados: string[] = [];
+    for (const idioma of ["en", "es"]) {
+      const v = parte2.versoes?.[idioma];
+      if (!v) continue;
+      for (const campo of ["titulo", "titulo_destaque"]) {
+        const novos = (String(v[campo] ?? "").match(/\d+/g) ?? []).filter(
+          (n: string) => !numerosPt.has(n)
+        );
+        if (novos.length) achados.push(`${idioma}.${campo}: ${novos.join(", ")}`);
+      }
+    }
+    return achados;
+  })();
+  if (titulosComDadoNovo.length) {
+    const aviso =
+      "ATENCAO: o titulo traduzido traz numero que nao esta no titulo em " +
+      `portugues (${titulosComDadoNovo.join(" | ")}). Confira se nao foi ` +
+      "acrescentada informacao que o original nao tem.";
+    parte2.notas_extracao = [aviso, parte2.notas_extracao ?? ""].filter(Boolean).join("\n");
+  }
+
   // Se a parte 2 reescreveu o pt-BR sem as tags, reaplica: o portugues nao
   // depende da Tess para manter a formatacao.
   const ptFinal = parte2.versoes?.["pt-BR"];
