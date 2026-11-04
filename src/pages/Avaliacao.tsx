@@ -13,8 +13,9 @@ interface Row {
   categoria: string;
   publicado_em: string | null;
   cover: string | null;
-  // Extração sem o corpo da matéria: faltam imagem, vídeo, negrito e legenda
+  // Extração deixou um aviso: sem corpo da matéria, título com dado novo…
   alerta: boolean;
+  alertaTexto: string;
 }
 
 type Counts = Record<Status, number>;
@@ -76,6 +77,7 @@ export function AvaliacaoPage() {
       publicado_em: n.publicado_em,
       cover: iMap.get(n.group_id) ?? null,
       alerta: (n.notas_extracao ?? '').startsWith('ATENCAO'),
+      alertaTexto: (n.notas_extracao ?? '').split('\n')[0],
     }));
 
     setRows(merged);
@@ -402,6 +404,7 @@ export function AvaliacaoPage() {
               aprovada={tab === 'aprovado'}
               onSeo={() => setSeoDe(r.group_id)}
               alerta={r.alerta}
+              alertaTexto={r.alertaTexto}
             />
           ))}
         </div>
