@@ -49,6 +49,21 @@ async function sha6(input: string): Promise<string> {
     .slice(0, 6);
 }
 
+// O caminho da URL nao aceita acento: "brasilenos" com til, "cirugia" com
+// acento e "campeon" vinham do agente direto para a url_personalizada. Mantem
+// as barras do caminho e limpa cada trecho.
+export function limparCaminho(caminho: string): string {
+  return (caminho ?? "")
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+    .replace(/[^a-z0-9/-]+/g, "-")
+    .replace(/-{2,}/g, "-")
+    .replace(/\/{2,}/g, "/")
+    .replace(/-?\/-?/g, "/")
+    .replace(/^-|-$/g, "");
+}
+
 function slugify(str: string): string {
   return str
     .normalize("NFD")
@@ -295,7 +310,7 @@ export function extrairImagensInline(html: string): ImagemInline[] {
 // paragrafo: a contagem de paragrafos nao bate entre os idiomas.
 
 export interface SpanFormatado {
-  tipo: "strong" | "em" | "u" | "a";
+  tipo: "strong" | "em" | "u" | "a" | "h2" | "h3" | "h4" | "h5" | "h6";
   texto: string;
   href?: string;
   // Em qual aparicao desse texto na materia o trecho estava (0 = primeira) e
@@ -336,6 +351,18 @@ export function extrairSpansFormatados(html: string): SpanFormatado[] {
     const tipo = equivalente[m[1].toLowerCase()];
     const texto = limpar(m[2]);
     if (tipo && texto.length >= 2) {
+      const { indice, total } = ocorrenciasAte(m.index, normalizarComMapa(texto).norm);
+      out.push({ tipo, texto, ocorrencia: indice, totalNaMateria: total });
+    }
+  }
+
+  // Titulo de secao dentro da materia (o editor usa h4, que sai em negrito no
+  // site). Entra como marcacao para voltar como <h4> no corpo traduzido.
+  const titulos = /<(h[2-6])\b[^>]*>([\s\S]*?)<\/\1>/gi;
+  while ((m = titulos.exec(body))) {
+    const tipo = m[1].toLowerCase() as SpanFormatado["tipo"];
+    const texto = limpar(m[2]);
+    if (texto.length >= 2) {
       const { indice, total } = ocorrenciasAte(m.index, normalizarComMapa(texto).norm);
       out.push({ tipo, texto, ocorrencia: indice, totalNaMateria: total });
     }
@@ -617,6 +644,13 @@ async function processarUrl(
     'ingles escreva sempre "Rubro-Negro" (nunca "Rojo-Negro", "rojinegro" ou ' +
     '"Red-Black") e "Mengao" com til: "Mengão". Nao chame o Flamengo de ' +
     '"el Rojo" em espanhol — esse e o apelido do Independiente.';
+  const instrucaoFidelidade =
+    "FIDELIDADE: traduza o que esta no original. NAO acrescente no titulo nem " +
+    "no titulo de destaque informacao que nao esteja no titulo em portugues — " +
+    "placar, numero de rodada, valores, datas, nomes ou adjetivo de avaliacao " +
+    "(crise, historico, brilhante). Reformatar o que ja existe e permitido " +
+    '(ex.: "02/11 a 08/11" -> "November 2-8"). O mesmo vale para o corpo: ' +
+    "nenhum dado novo.";
   const instrucaoDestaque =
     'TITULO DE DESTAQUE: inclua em cada idioma, dentro de "versoes", o campo ' +
     '"titulo_destaque": versao curta do titulo para banner, de ate 60 ' +
@@ -654,9 +688,10 @@ async function processarUrl(
   // PARTE 2: Traducao
   const instrucaoFormatacao =
     "FORMATACAO: o corpo em pt-BR pode conter as tags <strong>, <em>, <u>, " +
-    "<a href=\"...\"> e <br>. Mantenha cada uma delas em volta do trecho " +
-    "equivalente na traducao, sem acrescentar outras tags e sem traduzir o " +
-    "endereco dos links.";
+    '<a href="...">, <br> e titulos de secao <h2> a <h6>. Mantenha cada uma ' +
+    "delas em volta do trecho equivalente na traducao, sem acrescentar outras " +
+    "tags e sem traduzir o endereco dos links. Um titulo de secao continua " +
+    "sendo titulo de secao na traducao, com a mesma tag.";
   const legendasPt = imagensInline.map((i) => i.caption ?? "");
   const instrucaoLegendas = legendasPt.some((l) => l)
     ? "LEGENDAS DAS IMAGENS: traduza as legendas numeradas abaixo e devolva no " +
@@ -665,7 +700,7 @@ async function processarUrl(
       "vazia). Credito de foto se mantem: so traduza a parte descritiva.\n" +
       legendasPt.map((l, i) => `${i}: ${l}`).join("\n")
     : "";
-  const userMsg2 = `JSON da Parte 1:\n${JSON.stringify(parte1)}\n\n${instrucaoFormatacao}\n\n${instrucaoDestaque}\n\n${instrucaoApelidos}\n\n${instrucaoLegendas}\n\n${GUIA_TOM_EN}\n\n${GUIA_TOM_ES}\n\nReferencias EN (se nao abrirem, vale o guia acima):\n${refsEn.join("\n") || "(nenhuma)"}\n\nReferencias ES (se nao abrirem, vale o guia acima):\n${refsEs.join("\n") || "(nenhuma)"}`;
+  const userMsg2 = `JSON da Parte 1:\n${JSON.stringify(parte1)}\n\n${instrucaoFormatacao}\n\n${instrucaoFidelidade}\n\n${instrucaoDestaque}\n\n${instrucaoApelidos}\n\n${instrucaoLegendas}\n\n${GUIA_TOM_EN}\n\n${GUIA_TOM_ES}\n\nReferencias EN (se nao abrirem, vale o guia acima):\n${refsEn.join("\n") || "(nenhuma)"}\n\nReferencias ES (se nao abrirem, vale o guia acima):\n${refsEs.join("\n") || "(nenhuma)"}`;
   const text2 = await callTessAgent(TESS_AGENT_TRADUCAO, userMsg2);
   const parte2 = extractJson(text2);
 
@@ -768,7 +803,7 @@ async function persistir(data: any) {
         normalizarApelidos(k)
       ),
       // A URL fica de fora: o slug nao leva acento nem segue o apelido.
-      url_personalizada: v.url_personalizada ?? "",
+      url_personalizada: limparCaminho(v.url_personalizada ?? ""),
       categoria: v.categoria ?? "",
       titulo_destaque: tituloDestaque(v),
     })

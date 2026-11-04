@@ -129,19 +129,34 @@ function estiloAlinhamento(alinhamento: string | null | undefined): string {
   return (ALINHAMENTOS as readonly string[]).includes(a) ? ` style="text-align: ${a}"` : '';
 }
 
+// Linha que já é um bloco inteiro (título de seção, lista, citação): sai com a
+// própria tag, não embrulhada em <p>. Título não leva o alinhamento do corpo.
+const SO_BLOCO = /^<(h[2-6]|ul|ol|blockquote)\b[^>]*>([\s\S]*)<\/\1>$/i;
+
 function corpoEmParagrafos(corpo: string, alinhamento?: string | null): string[] {
   const estilo = estiloAlinhamento(alinhamento);
-  if (/<(p|h[1-6]|ul|ol|blockquote)[\s>]/i.test(corpo)) {
+  // Só trata como HTML de blocos quando há <p>: o corpo normal vem em linhas
+  // de texto e algumas delas podem ser <h4> sozinho — nesse caso o caminho de
+  // blocos descartaria todos os parágrafos.
+  if (/<p[\s>]/i.test(corpo)) {
     return [...corpo.matchAll(BLOCO_RE)].map((m) => {
       const tag = m[1].toLowerCase();
-      return `<${tag}${estilo}>${sanitizeInline(m[2])}</${tag}>`;
+      const ehTitulo = /^h[1-6]$/.test(tag);
+      return `<${tag}${ehTitulo ? '' : estilo}>${sanitizeInline(m[2])}</${tag}>`;
     });
   }
   return corpo
     .split(/\r?\n+/)
     .map((p) => p.trim())
     .filter(Boolean)
-    .map((p) => `<p${estilo}>${sanitizeInline(p)}</p>`);
+    .map((p) => {
+      const b = SO_BLOCO.exec(p);
+      if (b) {
+        const tag = b[1].toLowerCase();
+        return `<${tag}>${sanitizeInline(b[2])}</${tag}>`;
+      }
+      return `<p${estilo}>${sanitizeInline(p)}</p>`;
+    });
 }
 
 // srcset no padrão que o editor do Strapi grava: a mesma URL repetida nas
@@ -222,6 +237,17 @@ function montarBodyRichText(
   return out.join('');
 }
 
+// O caminho da URL só aceita a-z, 0-9 e hífen.
+function semAcento(s: string): string {
+  return s
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase()
+    .replace(/[^a-z0-9-]+/g, '-')
+    .replace(/-{2,}/g, '-')
+    .replace(/^-|-$/g, '');
+}
+
 // Data e hora de publicação em ISO com o fuso de Brasília (-03:00). O banco
 // guarda o instante em UTC; o arquivo sai no horário local para conferir sem
 // conversão de cabeça. O Brasil não tem horário de verão, então -03:00 é fixo.
@@ -251,7 +277,9 @@ function paraStrapi(
 ) {
   // Só o último trecho do caminho: "news/football/abc-def" -> "abc-def".
   // O prefixo de seção é definido pelo próprio CMS na importação.
-  const slug = (v.url_personalizada || '').split('/').filter(Boolean).pop() ?? '';
+  // O acento é removido aqui também: linhas gravadas antes da correção na
+  // extração ainda trazem "brasileños" e o caminho da URL não aceita.
+  const slug = semAcento((v.url_personalizada || '').split('/').filter(Boolean).pop() ?? '');
   return {
     locale,
     fields: {
