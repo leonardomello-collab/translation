@@ -19,11 +19,11 @@ const TESS_MODEL = Deno.env.get("TESS_MODEL") ?? "claude-4.5-haiku";
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL") ?? "";
 const SERVICE_ROLE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? "";
 
-// Limite por chamada externa. Sem ele, uma chamada que nunca responde deixa a
-// function ser morta pelo runtime antes do catch: o job fica "processando"
-// para sempre, sem erro e sem fim. Duas chamadas a Tess (extracao e traducao)
-// precisam caber na janela do runtime.
-const TIMEOUT_TESS_MS = 150_000;
+// Limite por chamada externa. Sem ele, uma chamada que nunca responde pode
+// deixar o job "processando" sem erro e sem fim. A folga e grande de proposito:
+// materia longa ja levou 189s somando as duas chamadas a Tess, e cortar uma
+// traducao valida e pior do que esperar um pouco mais pelo erro.
+const TIMEOUT_TESS_MS = 240_000;
 const TIMEOUT_PAGINA_MS = 30_000;
 
 // AbortSignal.timeout nem sempre existe no runtime; o controller manual vale
