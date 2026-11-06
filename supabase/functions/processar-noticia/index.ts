@@ -692,6 +692,21 @@ async function processarUrl(
     'ingles escreva sempre "Rubro-Negro" (nunca "Rojo-Negro", "rojinegro" ou ' +
     '"Red-Black") e "Mengao" com til: "Mengão". Nao chame o Flamengo de ' +
     '"el Rojo" em espanhol — esse e o apelido do Independiente.';
+  // Nome de clube saiu traduzido ("Corinthians Union", "Unión Corinthians") e o
+  // erro foi junto para a URL. Clube estrangeiro nao copia o nome em portugues:
+  // "Bayern de Munique" em ingles e "Bayern Munich".
+  const instrucaoClubes =
+    "NOMES DE CLUBES (regra dura): nome de clube nunca se traduz, seja o " +
+    "Flamengo, seja o adversario, em qualquer modalidade e em todos os campos.\n" +
+    'ERRADO: "União Corinthians" -> en "Corinthians Union" ou es "Unión Corinthians".\n' +
+    'CERTO: "União Corinthians" nas duas linguas, com o acento.\n' +
+    "Clube brasileiro fica exatamente como esta em portugues: Atlético-MG, " +
+    "São Paulo, Vitória, Juventude, Internacional, Minas Tênis Clube, " +
+    "Sesc-RJ Flamengo, Flamengo/Maricá. Na url_personalizada o nome tambem nao " +
+    'se traduz, so perde o acento: "uniao-corinthians". Clube estrangeiro usa ' +
+    "o proprio nome, nunca uma traducao palavra por palavra: " +
+    '"Bayern de Munique" -> en "Bayern Munich". Selecao nacional nao e clube e ' +
+    "segue traduzida normalmente.";
   const instrucaoFidelidade =
     "FIDELIDADE DO TITULO (regra dura): o titulo e o titulo de destaque " +
     "traduzidos nao podem conter nenhum numero, nome ou adjetivo que nao " +
@@ -752,7 +767,7 @@ async function processarUrl(
       "vazia). Credito de foto se mantem: so traduza a parte descritiva.\n" +
       legendasPt.map((l, i) => `${i}: ${l}`).join("\n")
     : "";
-  const userMsg2 = `JSON da Parte 1:\n${JSON.stringify(parte1)}\n\n${instrucaoFormatacao}\n\n${instrucaoFidelidade}\n\n${instrucaoDestaque}\n\n${instrucaoApelidos}\n\n${instrucaoLegendas}\n\n${GUIA_TOM_EN}\n\n${GUIA_TOM_ES}\n\nReferencias EN (se nao abrirem, vale o guia acima):\n${refsEn.join("\n") || "(nenhuma)"}\n\nReferencias ES (se nao abrirem, vale o guia acima):\n${refsEs.join("\n") || "(nenhuma)"}`;
+  const userMsg2 = `JSON da Parte 1:\n${JSON.stringify(parte1)}\n\n${instrucaoFormatacao}\n\n${instrucaoFidelidade}\n\n${instrucaoDestaque}\n\n${instrucaoApelidos}\n\n${instrucaoClubes}\n\n${instrucaoLegendas}\n\n${GUIA_TOM_EN}\n\n${GUIA_TOM_ES}\n\nReferencias EN (se nao abrirem, vale o guia acima):\n${refsEn.join("\n") || "(nenhuma)"}\n\nReferencias ES (se nao abrirem, vale o guia acima):\n${refsEs.join("\n") || "(nenhuma)"}`;
   const text2 = await callTessAgent(TESS_AGENT_TRADUCAO, userMsg2);
   const parte2 = extractJson(text2);
 
