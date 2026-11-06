@@ -19,6 +19,25 @@ const TESS_MODEL = Deno.env.get("TESS_MODEL") ?? "claude-4.5-haiku";
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL") ?? "";
 const SERVICE_ROLE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? "";
 
+// Limite por chamada externa. Sem ele, uma chamada que nunca responde deixa a
+// function ser morta pelo runtime antes do catch: o job fica "processando"
+// para sempre, sem erro e sem fim. Duas chamadas a Tess (extracao e traducao)
+// precisam caber na janela do runtime.
+const TIMEOUT_TESS_MS = 150_000;
+const TIMEOUT_PAGINA_MS = 30_000;
+
+// AbortSignal.timeout nem sempre existe no runtime; o controller manual vale
+// em qualquer versao.
+function limiteDeTempo(ms: number) {
+  const ctrl = new AbortController();
+  const id = setTimeout(() => ctrl.abort(), ms);
+  return { signal: ctrl.signal, cancelar: () => clearTimeout(id) };
+}
+
+function ehAborto(e: any): boolean {
+  return e?.name === "AbortError" || e?.name === "TimeoutError";
+}
+
 function assertSecrets() {
   const missing: string[] = [];
   if (!TESS_API_KEY) missing.push("TESS_API_KEY");
@@ -94,17 +113,32 @@ async function callTessAgent(
   };
   if (TESS_WORKSPACE_ID) headers["x-workspace-id"] = TESS_WORKSPACE_ID;
 
-  const res = await fetch(url, {
-    method: "POST",
-    headers,
-    body: JSON.stringify({
-      temperature: "0.25",
-      model: TESS_MODEL,
-      tools: "no-tools",
-      waitExecution: true,
-      messages: [{ role: "user", content: userPrompt }],
-    }),
-  });
+  const limite = limiteDeTempo(TIMEOUT_TESS_MS);
+  let res: Response;
+  try {
+    res = await fetch(url, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({
+        temperature: "0.25",
+        model: TESS_MODEL,
+        tools: "no-tools",
+        waitExecution: true,
+        messages: [{ role: "user", content: userPrompt }],
+      }),
+      signal: limite.signal,
+    });
+  } catch (e: any) {
+    if (ehAborto(e)) {
+      throw new Error(
+        `Tess nao respondeu em ${Math.round(TIMEOUT_TESS_MS / 1000)}s. ` +
+          "Use o botao de reprocessar na fila."
+      );
+    }
+    throw e;
+  } finally {
+    limite.cancelar();
+  }
 
   if (!res.ok) {
     const body = await res.text();
@@ -574,12 +608,26 @@ async function processarUrl(
   refsEs: string[],
   jobId: string
 ) {
-  const pageRes = await fetch(url_origem, {
-    headers: {
-      "User-Agent": "Mozilla/5.0 (compatible; FlaNewsBot/1.0)",
-      Accept: "text/html",
-    },
-  });
+  const limitePagina = limiteDeTempo(TIMEOUT_PAGINA_MS);
+  let pageRes: Response;
+  try {
+    pageRes = await fetch(url_origem, {
+      headers: {
+        "User-Agent": "Mozilla/5.0 (compatible; FlaNewsBot/1.0)",
+        Accept: "text/html",
+      },
+      signal: limitePagina.signal,
+    });
+  } catch (e: any) {
+    if (ehAborto(e)) {
+      throw new Error(
+        `A pagina nao respondeu em ${Math.round(TIMEOUT_PAGINA_MS / 1000)}s`
+      );
+    }
+    throw e;
+  } finally {
+    limitePagina.cancelar();
+  }
   if (!pageRes.ok) {
     throw new Error(
       `URL retornou HTTP ${pageRes.status} — pagina nao encontrada ou inacessivel`

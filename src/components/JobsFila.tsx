@@ -7,6 +7,7 @@ export function JobsFila() {
   const [jobs, setJobs] = useState<JobTraducao[]>([]);
   const [loading, setLoading] = useState<string | null>(null);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const wdRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   async function carregar() {
     const { data } = await supabase
@@ -33,8 +34,24 @@ export function JobsFila() {
     return () => {
       supabase.removeChannel(ch);
       if (pollRef.current) clearInterval(pollRef.current);
+      if (wdRef.current) clearInterval(wdRef.current);
     };
   }, []);
+
+  // O watchdog so rodava na montagem: com a aba aberta, um job preso pela morte
+  // da function ficava "Extraindo" para sempre na tela, e so um F5 destravava.
+  // Enquanto houver job ativo, cobra o watchdog de minuto em minuto.
+  useEffect(() => {
+    const hasActive = jobs.some((j) => j.status === 'fila' || j.status === 'processando');
+    if (!hasActive && wdRef.current) {
+      clearInterval(wdRef.current);
+      wdRef.current = null;
+    } else if (hasActive && !wdRef.current) {
+      wdRef.current = setInterval(() => {
+        runWatchdog().then(() => carregar()).catch(() => {});
+      }, 60000);
+    }
+  }, [jobs]);
 
   // Stop polling when no active jobs (save resources)
   useEffect(() => {
